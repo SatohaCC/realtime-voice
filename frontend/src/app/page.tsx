@@ -1,6 +1,6 @@
 import * as stylex from "@stylexjs/stylex";
-import { DualMicPanelContainer } from "@/features/audio/DualMicPanelContainer";
 import { HealthStatusContainer } from "@/features/health/HealthStatusContainer";
+import { RealtimeTranscriptionContainer } from "@/features/transcription/RealtimeTranscriptionContainer";
 import { pageStyles as s } from "./page.styles";
 
 export default function HomePage() {
@@ -37,15 +37,15 @@ export default function HomePage() {
       <section id="audio" aria-labelledby="audio-title" {...stylex.props(s.section)}>
         <div {...stylex.props(s.sectionHeader)}>
           <h2 id="audio-title" {...stylex.props(s.sectionTitle)}>
-            音声入力モニター
+            リアルタイム文字起こし
           </h2>
-          <p {...stylex.props(s.muted)}>AudioWorklet · 16kHz PCM</p>
+          <p {...stylex.props(s.muted)}>AudioWorklet · Deepgram Nova-3</p>
         </div>
         <div {...stylex.props(s.panel)}>
           <p {...stylex.props(s.panelDescription)}>
-            1本または2本のマイクを選択し、話者ごとの入力レベルと 16kHz PCM 取得を確認できます。
+            1本または2本のマイクを選択して、話者別のリアルタイム文字起こしを確認できます。
           </p>
-          <DualMicPanelContainer />
+          <RealtimeTranscriptionContainer />
         </div>
       </section>
       <section id="connection" aria-labelledby="connection-title" {...stylex.props(s.section)}>

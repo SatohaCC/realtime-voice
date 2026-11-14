@@ -1,0 +1,258 @@
+export interface DeepgramStreamOptions {
+  channels: 1 | 2;
+  language?: string;
+  sampleRate?: number;
+  endpointingMs?: number;
+  baseUrl?: string;
+  signal?: AbortSignal;
+  onTranscript: (event: DeepgramTranscriptEvent) => void;
+  onError?: (error: Error) => void;
+  onClose?: (event: { code: number; reason: string }) => void;
+}
+
+export interface DeepgramTranscriptEvent {
+  channelIndex: 0 | 1;
+  text: string;
+  isFinal: boolean;
+  speechFinal: boolean;
+  startSec: number;
+  endSec: number;
+  confidence: number;
+}
+
+export interface DeepgramStreamSession {
+  sendAudio: (pcm16: ArrayBuffer) => void;
+  close: () => Promise<void>;
+}
+
+interface DeepgramRawResponse {
+  type?: string;
+  message?: string;
+  description?: string;
+  channel_index?: number[];
+  start?: number;
+  duration?: number;
+  is_final?: boolean;
+  speech_final?: boolean;
+  channel?: {
+    alternatives?: Array<{
+      transcript?: string;
+      confidence?: number;
+    }>;
+  };
+}
+
+/**
+ * 実行環境に応じて FastAPI 文字起こし中継 WebSocket のベース URL を解決する。
+ */
+export function resolveTranscriptionWsBaseUrl(baseUrl?: string): string {
+  const configured = baseUrl?.trim() || process.env.NEXT_PUBLIC_BACKEND_WS_URL?.trim();
+  if (configured) {
+    return configured.replace(/\/$/, "");
+  }
+
+  if (typeof window !== "undefined") {
+    const { hostname, host, port, protocol } = window.location;
+    // ローカル next dev (:3000) の HTTP rewrite は WebSocket upgrade を行わないため :8000 へ直接接続する
+    if ((hostname === "localhost" || hostname === "127.0.0.1") && port === "3000") {
+      return `ws://${hostname}:8000`;
+    }
+    const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
+    return `${wsProtocol}//${host}`;
+  }
+
+  return "ws://localhost:8000";
+}
+
+/**
+ * Backend 中継 WebSocket (`/api/transcriptions/ws`) の接続 URL を組み立てる。
+ */
+export function buildDeepgramWebSocketUrl({
+  channels,
+  language = "ja",
+  sampleRate = 16000,
+  endpointingMs = 300,
+  baseUrl,
+}: {
+  channels: 1 | 2;
+  language?: string;
+  sampleRate?: number;
+  endpointingMs?: number;
+  baseUrl?: string;
+}): string {
+  const params = new URLSearchParams({
+    channels: String(channels),
+    language,
+    sample_rate: String(sampleRate),
+    endpointing: String(endpointingMs),
+  });
+
+  const resolvedBase = resolveTranscriptionWsBaseUrl(baseUrl);
+  return `${resolvedBase}/api/transcriptions/ws?${params.toString()}`;
+}
+
+/**
+ * FastAPI / Deepgram から届いた Error イベントのメッセージを抽出する。
+ */
+export function parseDeepgramErrorMessage(rawData: string): string | null {
+  let parsed: DeepgramRawResponse;
+  try {
+    parsed = JSON.parse(rawData) as DeepgramRawResponse;
+  } catch {
+    return null;
+  }
+
+  if (parsed.type !== "Error") {
+    return null;
+  }
+
+  const detail = parsed.message?.trim() || parsed.description?.trim();
+  return detail || "文字起こしサーバーでエラーが発生しました。";
+}
+
+/**
+ * Deepgram WebSocket から受信した JSON メッセージを解析する。
+ */
+export function parseDeepgramMessage(rawData: string): DeepgramTranscriptEvent | null {
+  let parsed: DeepgramRawResponse;
+  try {
+    parsed = JSON.parse(rawData) as DeepgramRawResponse;
+  } catch {
+    return null;
+  }
+
+  if (parsed.type !== "Results") {
+    return null;
+  }
+
+  const alternative = parsed.channel?.alternatives?.[0];
+  const text = alternative?.transcript?.trim() ?? "";
+  if (!text) {
+    return null;
+  }
+
+  const rawChannel = parsed.channel_index?.[0] ?? 0;
+  const channelIndex: 0 | 1 = rawChannel === 1 ? 1 : 0;
+  const startSec = typeof parsed.start === "number" ? parsed.start : 0;
+  const durationSec = typeof parsed.duration === "number" ? parsed.duration : 0;
+
+  return {
+    channelIndex,
+    text,
+    isFinal: Boolean(parsed.is_final),
+    speechFinal: Boolean(parsed.speech_final),
+    startSec,
+    endSec: startSec + durationSec,
+    confidence: typeof alternative?.confidence === "number" ? alternative.confidence : 0,
+  };
+}
+
+/**
+ * Deepgram のリアルタイム WebSocket セッションを開き、PCM 送信と受信イベント処理を行う。
+ */
+export function createDeepgramStreamSession({
+  channels,
+  language = "ja",
+  sampleRate = 16000,
+  endpointingMs = 300,
+  baseUrl,
+  onTranscript,
+  onError,
+  onClose,
+  signal,
+}: DeepgramStreamOptions): Promise<DeepgramStreamSession> {
+  const url = buildDeepgramWebSocketUrl({ channels, language, sampleRate, endpointingMs, baseUrl });
+  if (signal?.aborted)
+    return Promise.reject(new DOMException("接続をキャンセルしました。", "AbortError"));
+  const socket = new WebSocket(url);
+  socket.binaryType = "arraybuffer";
+  let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  let closing = false;
+  let closed = false;
+  let closedManually = false;
+  let finishClose: () => void = () => {};
+  const closePromise = new Promise<void>((resolve) => {
+    finishClose = resolve;
+  });
+
+  return new Promise<DeepgramStreamSession>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearInterval(keepAliveTimer);
+      clearTimeout(closeTimer);
+      signal?.removeEventListener("abort", abort);
+    };
+    const forceClose = () => {
+      closing = true;
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+        socket.close(1000, "client closed");
+      cleanup();
+      finishClose();
+    };
+    const abort = () => {
+      closedManually = true;
+      if (!settled) {
+        settled = true;
+        reject(new DOMException("接続をキャンセルしました。", "AbortError"));
+      }
+      forceClose();
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    socket.onopen = () => {
+      settled = true;
+      keepAliveTimer = setInterval(() => {
+        if (!closing && socket.readyState === WebSocket.OPEN)
+          socket.send(JSON.stringify({ type: "KeepAlive" }));
+      }, 8000);
+      resolve({
+        sendAudio: (pcm16) => {
+          if (!closing && socket.readyState === WebSocket.OPEN) socket.send(pcm16);
+        },
+        close: () => {
+          if (closing || closed) return closePromise;
+          closing = true;
+          closedManually = true;
+          clearInterval(keepAliveTimer);
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "CloseStream" }));
+            // 中継側の最終結果待機（5秒）より長く待ち、応答しない接続も確実に解放する。
+            closeTimer = setTimeout(() => {
+              onError?.(new Error("文字起こしの最終結果の待機がタイムアウトしました。"));
+              forceClose();
+            }, 6000);
+          } else forceClose();
+          return closePromise;
+        },
+      });
+    };
+    socket.onmessage = (event) => {
+      if (typeof event.data !== "string") return;
+      const errorMessage = parseDeepgramErrorMessage(event.data);
+      if (errorMessage) {
+        onError?.(new Error(errorMessage));
+        return;
+      }
+      const parsed = parseDeepgramMessage(event.data);
+      if (parsed) onTranscript(parsed);
+    };
+    socket.onerror = () => {
+      const error = new Error("Deepgram WebSocket 接続でエラーが発生しました。");
+      if (!settled) {
+        settled = true;
+        closedManually = true;
+        reject(error);
+        forceClose();
+      } else onError?.(error);
+    };
+    socket.onclose = (event) => {
+      closed = true;
+      cleanup();
+      finishClose();
+      if (!settled) {
+        settled = true;
+        reject(new Error(`Deepgram WebSocket 接続が開始前に終了しました (code: ${event.code})。`));
+      } else if (!closedManually) onClose?.({ code: event.code, reason: event.reason });
+    };
+  });
+}

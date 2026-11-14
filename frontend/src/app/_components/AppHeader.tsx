@@ -16,7 +16,7 @@ export function AppHeader() {
 
   const navItems: HeaderNavItem[] = [
     { href: "/", label: "ホーム", isCurrent: pathname === "/" },
-    { href: "/#audio", label: "音声入力" },
+    { href: "/#audio", label: "文字起こし" },
     { href: "/#connection", label: "接続状態" },
     { href: "/#colors", label: "カラー" },
   ];

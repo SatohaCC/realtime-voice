@@ -18,6 +18,14 @@ class DualPcmProcessor extends AudioWorkletProcessor {
     this.leftEnergySum = 0;
     this.rightEnergySum = 0;
     this.energySampleCount = 0;
+    this.stopped = false;
+    this.port.onmessage = (event) => {
+      if (event.data?.type === "flush") {
+        this.flush();
+        this.stopped = true;
+        this.port.postMessage({ type: "flushed" });
+      }
+    };
   }
 
   /**
@@ -28,7 +36,40 @@ class DualPcmProcessor extends AudioWorkletProcessor {
     return clamped < 0 ? Math.round(clamped * 0x8000) : Math.round(clamped * 0x7fff);
   }
 
+  /** 停止時は100ms未満の末尾音声も送信する。 */
+  flush() {
+    if (this.bufferedFrames === 0) return;
+    const leftRms =
+      this.energySampleCount > 0 ? Math.sqrt(this.leftEnergySum / this.energySampleCount) : 0;
+    const rightRms =
+      this.activeChannels === 2 && this.energySampleCount > 0
+        ? Math.sqrt(this.rightEnergySum / this.energySampleCount)
+        : 0;
+
+    const payload =
+      this.bufferedFrames === TARGET_FRAMES_PER_CHUNK
+        ? this.pcmBuffer
+        : this.pcmBuffer.slice(0, this.bufferedFrames * this.activeChannels);
+    this.port.postMessage(
+      {
+        type: "audio-frame",
+        pcm16: payload.buffer,
+        sampleRate: TARGET_SAMPLE_RATE,
+        channels: this.activeChannels,
+        levels: [Math.min(1, leftRms), Math.min(1, rightRms)],
+      },
+      [payload.buffer],
+    );
+
+    this.pcmBuffer = new Int16Array(TARGET_FRAMES_PER_CHUNK * this.activeChannels);
+    this.bufferedFrames = 0;
+    this.leftEnergySum = 0;
+    this.rightEnergySum = 0;
+    this.energySampleCount = 0;
+  }
+
   process(inputs) {
+    if (this.stopped) return false;
     const input = inputs[0];
     if (!input || input.length === 0) {
       return true;
@@ -68,30 +109,7 @@ class DualPcmProcessor extends AudioWorkletProcessor {
       this.phase += this.ratio;
 
       if (this.bufferedFrames >= TARGET_FRAMES_PER_CHUNK) {
-        const leftRms =
-          this.energySampleCount > 0 ? Math.sqrt(this.leftEnergySum / this.energySampleCount) : 0;
-        const rightRms =
-          this.activeChannels === 2 && this.energySampleCount > 0
-            ? Math.sqrt(this.rightEnergySum / this.energySampleCount)
-            : 0;
-
-        const payload = this.pcmBuffer;
-        this.port.postMessage(
-          {
-            type: "audio-frame",
-            pcm16: payload.buffer,
-            sampleRate: TARGET_SAMPLE_RATE,
-            channels: this.activeChannels,
-            levels: [Math.min(1, leftRms), Math.min(1, rightRms)],
-          },
-          [payload.buffer],
-        );
-
-        this.pcmBuffer = new Int16Array(TARGET_FRAMES_PER_CHUNK * this.activeChannels);
-        this.bufferedFrames = 0;
-        this.leftEnergySum = 0;
-        this.rightEnergySum = 0;
-        this.energySampleCount = 0;
+        this.flush();
       }
     }
 

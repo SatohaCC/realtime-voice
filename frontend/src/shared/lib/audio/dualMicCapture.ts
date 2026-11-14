@@ -13,6 +13,7 @@ export interface AudioCaptureFrame {
 }
 
 export interface DualMicCaptureOptions {
+  signal?: AbortSignal;
   mic1DeviceId: string;
   mic2DeviceId?: string;
   onAudioFrame: (frame: AudioCaptureFrame) => void;
@@ -50,6 +51,7 @@ export async function createDualMicCapture({
   mic2DeviceId,
   onAudioFrame,
   onError,
+  signal,
 }: DualMicCaptureOptions): Promise<DualMicCaptureSession> {
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
     throw new Error("このブラウザはマイク入力（getUserMedia）に対応していません。");
@@ -67,13 +69,27 @@ export async function createDualMicCapture({
 
   const streams: MediaStream[] = [];
   let audioContext: AudioContext | null = null;
+  let closing: Promise<void> | undefined;
+  const release = async () => {
+    for (const stream of streams) for (const track of stream.getTracks()) track.stop();
+    if (audioContext && audioContext.state !== "closed") {
+      closing ??= audioContext.close();
+      await closing;
+    }
+  };
+  const abort = () => {
+    void release().catch(() => {});
+  };
+  signal?.addEventListener("abort", abort, { once: true });
 
   try {
+    signal?.throwIfAborted();
     const stream1 = await navigator.mediaDevices.getUserMedia({
       audio: buildConstraints(mic1DeviceId),
       video: false,
     });
     streams.push(stream1);
+    signal?.throwIfAborted();
 
     let stream2: MediaStream | null = null;
     if (useDual && mic2DeviceId) {
@@ -82,10 +98,12 @@ export async function createDualMicCapture({
         video: false,
       });
       streams.push(stream2);
+      signal?.throwIfAborted();
     }
 
     audioContext = new AudioContext({ sampleRate: 16000 });
     await audioContext.audioWorklet.addModule(WORKLET_URL);
+    signal?.throwIfAborted();
 
     const merger = audioContext.createChannelMerger(channels);
     const workletNode = new AudioWorkletNode(audioContext, "dual-pcm-processor", {
@@ -113,6 +131,8 @@ export async function createDualMicCapture({
     workletNode.connect(muteGain);
     muteGain.connect(audioContext.destination);
 
+    let flushed: (() => void) | undefined;
+    let stopping: Promise<void> | undefined;
     workletNode.port.onmessage = (event: MessageEvent) => {
       const data = event.data as {
         type?: string;
@@ -121,6 +141,10 @@ export async function createDualMicCapture({
         channels?: 1 | 2;
         levels?: [number, number];
       };
+      if (data?.type === "flushed") {
+        flushed?.();
+        return;
+      }
       if (data?.type === "audio-frame" && data.pcm16 && data.levels) {
         onAudioFrame({
           pcm16: data.pcm16,
@@ -135,31 +159,35 @@ export async function createDualMicCapture({
       onError?.(new Error("AudioWorklet の処理中にエラーが発生しました。"));
     };
 
-    return {
-      stop: async () => {
+    signal?.removeEventListener("abort", abort);
+    const stop = async () => {
+      // 部分チャンクを受け取ってから、収音ノードとストリームを解放する。
+      try {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 250);
+          flushed = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          workletNode.port.postMessage({ type: "flush" });
+        });
+      } finally {
         workletNode.port.onmessage = null;
         workletNode.disconnect();
         merger.disconnect();
         muteGain.disconnect();
-        for (const stream of streams) {
-          for (const track of stream.getTracks()) {
-            track.stop();
-          }
-        }
-        if (audioContext && audioContext.state !== "closed") {
-          await audioContext.close();
-        }
+        await release();
+      }
+    };
+    return {
+      stop: () => {
+        stopping ??= stop();
+        return stopping;
       },
     };
   } catch (error) {
-    for (const stream of streams) {
-      for (const track of stream.getTracks()) {
-        track.stop();
-      }
-    }
-    if (audioContext && audioContext.state !== "closed") {
-      await audioContext.close();
-    }
+    signal?.removeEventListener("abort", abort);
+    await release();
     throw error instanceof Error ? error : new Error("マイクの初期化に失敗しました。");
   }
 }
