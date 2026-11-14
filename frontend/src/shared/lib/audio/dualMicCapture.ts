@@ -1,0 +1,180 @@
+export interface AudioInputDeviceInfo {
+  deviceId: string;
+  label: string;
+}
+
+export interface AudioCaptureFrame {
+  /** 16kHz インターリーブ済み Int16 PCM バッファ */
+  pcm16: ArrayBuffer;
+  sampleRate: number;
+  channels: 1 | 2;
+  /** 各チャンネルの RMS 音量 (0.0〜1.0) */
+  levels: readonly [number, number];
+}
+
+export interface DualMicCaptureOptions {
+  mic1DeviceId: string;
+  mic2DeviceId?: string;
+  onAudioFrame: (frame: AudioCaptureFrame) => void;
+  onError?: (error: Error) => void;
+}
+
+export interface DualMicCaptureSession {
+  stop: () => Promise<void>;
+}
+
+const WORKLET_URL = "/worklets/dual-pcm-processor.js";
+
+/**
+ * 利用可能な音声入力デバイス一覧を取得する。
+ */
+export async function listAudioInputDevices(): Promise<AudioInputDeviceInfo[]> {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
+    return [];
+  }
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return devices
+    .filter((device) => device.kind === "audioinput")
+    .map((device, index) => ({
+      deviceId: device.deviceId,
+      label: device.label || `マイク ${index + 1}`,
+    }));
+}
+
+/**
+ * 1本または2本のマイクから AudioWorklet 経由で 16kHz PCM と音量レベルを連続取得する。
+ */
+export async function createDualMicCapture({
+  mic1DeviceId,
+  mic2DeviceId,
+  onAudioFrame,
+  onError,
+}: DualMicCaptureOptions): Promise<DualMicCaptureSession> {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+    throw new Error("このブラウザはマイク入力（getUserMedia）に対応していません。");
+  }
+
+  const useDual = Boolean(mic2DeviceId);
+  const channels: 1 | 2 = useDual ? 2 : 1;
+
+  const buildConstraints = (deviceId: string): MediaTrackConstraints => ({
+    deviceId: deviceId ? { exact: deviceId } : undefined,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  });
+
+  const streams: MediaStream[] = [];
+  let audioContext: AudioContext | null = null;
+
+  try {
+    const stream1 = await navigator.mediaDevices.getUserMedia({
+      audio: buildConstraints(mic1DeviceId),
+      video: false,
+    });
+    streams.push(stream1);
+
+    let stream2: MediaStream | null = null;
+    if (useDual && mic2DeviceId) {
+      stream2 = await navigator.mediaDevices.getUserMedia({
+        audio: buildConstraints(mic2DeviceId),
+        video: false,
+      });
+      streams.push(stream2);
+    }
+
+    audioContext = new AudioContext({ sampleRate: 16000 });
+    await audioContext.audioWorklet.addModule(WORKLET_URL);
+
+    const merger = audioContext.createChannelMerger(channels);
+    const workletNode = new AudioWorkletNode(audioContext, "dual-pcm-processor", {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: channels,
+      channelCountMode: "explicit",
+      processorOptions: { channels },
+    });
+
+    const source1 = audioContext.createMediaStreamSource(stream1);
+    source1.connect(merger, 0, 0);
+
+    if (stream2 && channels === 2) {
+      const source2 = audioContext.createMediaStreamSource(stream2);
+      source2.connect(merger, 0, 1);
+    }
+
+    // AudioWorkletNode は出力先へ繋がっていないと一部ブラウザで process() が動かないため、
+    // ゲイン 0 のノード経由で destination に接続してハウリングを防ぐ
+    const muteGain = audioContext.createGain();
+    muteGain.gain.value = 0;
+
+    merger.connect(workletNode);
+    workletNode.connect(muteGain);
+    muteGain.connect(audioContext.destination);
+
+    workletNode.port.onmessage = (event: MessageEvent) => {
+      const data = event.data as {
+        type?: string;
+        pcm16?: ArrayBuffer;
+        sampleRate?: number;
+        channels?: 1 | 2;
+        levels?: [number, number];
+      };
+      if (data?.type === "audio-frame" && data.pcm16 && data.levels) {
+        onAudioFrame({
+          pcm16: data.pcm16,
+          sampleRate: data.sampleRate ?? 16000,
+          channels: data.channels ?? channels,
+          levels: data.levels,
+        });
+      }
+    };
+
+    workletNode.onprocessorerror = () => {
+      onError?.(new Error("AudioWorklet の処理中にエラーが発生しました。"));
+    };
+
+    return {
+      stop: async () => {
+        workletNode.port.onmessage = null;
+        workletNode.disconnect();
+        merger.disconnect();
+        muteGain.disconnect();
+        for (const stream of streams) {
+          for (const track of stream.getTracks()) {
+            track.stop();
+          }
+        }
+        if (audioContext && audioContext.state !== "closed") {
+          await audioContext.close();
+        }
+      },
+    };
+  } catch (error) {
+    for (const stream of streams) {
+      for (const track of stream.getTracks()) {
+        track.stop();
+      }
+    }
+    if (audioContext && audioContext.state !== "closed") {
+      await audioContext.close();
+    }
+    throw error instanceof Error ? error : new Error("マイクの初期化に失敗しました。");
+  }
+}
+
+/**
+ * 2チャンネルの RMS 音量からアクティブな話者チャンネルを簡易判定する。
+ * 回り込み対策として、もう一方のチャンネルより一定比率以上大きい場合のみ優位とみなす。
+ */
+export function detectSpeakingChannels(
+  levels: readonly [number, number],
+  noiseFloor = 0.025,
+  dominanceRatio = 1.25,
+): readonly [boolean, boolean] {
+  const [left, right] = levels;
+  const leftSuppressed = right >= noiseFloor && right >= left * dominanceRatio;
+  const rightSuppressed = left >= noiseFloor && left >= right * dominanceRatio;
+  return [left >= noiseFloor && !leftSuppressed, right >= noiseFloor && !rightSuppressed];
+}

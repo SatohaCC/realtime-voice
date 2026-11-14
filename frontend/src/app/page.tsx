@@ -1,34 +1,19 @@
 import * as stylex from "@stylexjs/stylex";
+import { DualMicPanelContainer } from "@/features/audio/DualMicPanelContainer";
 import { HealthStatusContainer } from "@/features/health/HealthStatusContainer";
 import { pageStyles as s } from "./page.styles";
 
 export default function HomePage() {
   return (
-    <main {...stylex.props(s.page)}>
-      <header {...stylex.props(s.header)}>
-        <div {...stylex.props(s.brand)}>
-          <span {...stylex.props(s.mark)} aria-hidden="true">
-            v
-          </span>
-          <h1 {...stylex.props(s.name)}>Realtime Voice</h1>
-        </div>
-        <nav aria-label="ページ内ナビゲーション" {...stylex.props(s.navigation)}>
-          <a href="#colors" {...stylex.props(s.link)}>
-            カラー
-          </a>
-          <a href="#connection" {...stylex.props(s.link)}>
-            接続状態
-          </a>
-        </nav>
-      </header>
+    <main id="main-content" tabIndex={-1} {...stylex.props(s.page)}>
       <section aria-labelledby="intro-title" {...stylex.props(s.hero)}>
         <div {...stylex.props(s.introduction)}>
           <p {...stylex.props(s.eyebrow)}>A little voice. A new possibility.</p>
-          <h2 id="intro-title" {...stylex.props(s.headline)}>
+          <h1 id="intro-title" {...stylex.props(s.headline)}>
             声から、
             <br />
             次の体験へ。
-          </h2>
+          </h1>
           <p {...stylex.props(s.description)}>
             アイデアを、心地よく使えるかたちに。
             <br />
@@ -47,6 +32,20 @@ export default function HomePage() {
             <i {...stylex.props(s.wave, s.waveShort)} />
           </div>
           <span {...stylex.props(s.artCaption)}>DESIGNED TO FEEL A LITTLE MORE HUMAN</span>
+        </div>
+      </section>
+      <section id="audio" aria-labelledby="audio-title" {...stylex.props(s.section)}>
+        <div {...stylex.props(s.sectionHeader)}>
+          <h2 id="audio-title" {...stylex.props(s.sectionTitle)}>
+            音声入力モニター
+          </h2>
+          <p {...stylex.props(s.muted)}>AudioWorklet · 16kHz PCM</p>
+        </div>
+        <div {...stylex.props(s.panel)}>
+          <p {...stylex.props(s.panelDescription)}>
+            1本または2本のマイクを選択し、話者ごとの入力レベルと 16kHz PCM 取得を確認できます。
+          </p>
+          <DualMicPanelContainer />
         </div>
       </section>
       <section id="connection" aria-labelledby="connection-title" {...stylex.props(s.section)}>

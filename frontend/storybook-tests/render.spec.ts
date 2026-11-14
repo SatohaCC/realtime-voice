@@ -12,16 +12,26 @@ test("タブは明暗テーマ・狭い幅でも選択でき、フォーカス�
       await expect(first).toHaveAttribute("aria-selected", "true");
       await expect(first).toHaveCSS("border-top-width", "0px");
       await expect(page.getByRole("tablist")).toHaveCSS("border-bottom-width", "1px");
+      await page.keyboard.press("Tab");
       await first.focus();
       await expect(first).toHaveCSS("outline-style", "solid");
       await page.keyboard.press("ArrowRight");
       const second = page.getByRole("tab", { name: "詳細" });
       await expect(second).toHaveAttribute("aria-selected", "true");
       await expect(page.getByRole("tabpanel", { name: "詳細" })).toBeVisible();
-      const indicator = variant === "primary" ? second.locator("span") : second;
-      expect(await indicator.evaluate((el) => getComputedStyle(el, "::after").height)).toBe(
-        variant === "primary" ? "3px" : "2px",
-      );
+      const indicator = page.locator("[data-tab-indicator]");
+      await expect(indicator).toHaveCSS("height", variant === "primary" ? "3px" : "2px");
+      await expect(indicator).toBeVisible();
+      const target = variant === "primary" ? second.locator("[data-tab-content]") : second;
+      await expect
+        .poll(async () =>
+          Math.abs(
+            ((await indicator.boundingBox())?.x ?? Infinity) -
+              ((await target.boundingBox())?.x ?? 0),
+          ),
+        )
+        .toBeLessThan(1);
+      expect(await indicator.evaluate((el) => el.getAnimations().length)).toBe(0);
       await page.screenshot({ path: testInfo.outputPath(`tabs-${variant}-${colorScheme}.png`) });
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

@@ -1,0 +1,109 @@
+"use client";
+
+import * as stylex from "@stylexjs/stylex";
+import {
+  SelectContent,
+  SelectItem,
+  SelectItemIndicator,
+  SelectItemText,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+  Select as UiSelect,
+} from "@ui-sdk/react/select";
+import { selectStyles as s } from "./Select.styles";
+
+export interface SelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+export interface SelectProps {
+  label: string;
+  options: readonly SelectOption[];
+  value?: string | null;
+  defaultValue?: string | null;
+  onValueChange?: (value: string | null) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  style?: stylex.StyleXStyles;
+}
+
+/**
+ * `@ui-sdk/react/select` を M3 スタイルで包んだ単一選択セレクトボックス。
+ */
+export function Select({
+  label,
+  options,
+  value,
+  defaultValue,
+  onValueChange,
+  placeholder = "選択してください",
+  disabled = false,
+  style,
+}: SelectProps) {
+  return (
+    <div {...stylex.props(s.root, style)}>
+      <UiSelect
+        value={value}
+        defaultValue={defaultValue}
+        disabled={disabled}
+        placeholder={placeholder}
+        onValueChange={(nextValue) => onValueChange?.(nextValue)}
+      >
+        <SelectLabel {...stylex.props(s.label)}>{label}</SelectLabel>
+        <SelectTrigger
+          className={({ disabled: isDisabled }) =>
+            stylex.props(s.trigger, isDisabled && s.triggerDisabled).className
+          }
+        >
+          <SelectValue placeholder={placeholder} {...stylex.props(s.value)} />
+          <span {...stylex.props(s.chevron)} aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M6 9L12 15L18 9"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+        </SelectTrigger>
+
+        <SelectContent sideOffset={6} {...stylex.props(s.content)}>
+          {options.map((option) => (
+            <SelectItem
+              key={option.value}
+              value={option.value}
+              label={option.label}
+              disabled={option.disabled}
+              className={({ selected, highlighted, disabled: itemDisabled }) =>
+                stylex.props(
+                  s.item,
+                  highlighted && s.itemHighlighted,
+                  selected && s.itemSelected,
+                  itemDisabled && s.itemDisabled,
+                ).className
+              }
+            >
+              <SelectItemText>{option.label}</SelectItemText>
+              <SelectItemIndicator {...stylex.props(s.indicator)} aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M5 12.5L9.5 17L19 7.5"
+                    stroke="currentColor"
+                    strokeWidth="2.25"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </SelectItemIndicator>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </UiSelect>
+    </div>
+  );
+}

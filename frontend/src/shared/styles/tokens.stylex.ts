@@ -72,6 +72,7 @@ export const tokens = stylex.defineVars({
   outline: { default: palette.variant50, [DARK]: palette.variant60 },
   outlineVariant: { default: palette.variant80, [DARK]: palette.variant30 },
   error: { default: palette.error40, [DARK]: palette.error80 },
+  onError: { default: palette.neutral100, [DARK]: palette.error10 },
   errorContainer: { default: palette.error90, [DARK]: palette.error30 },
   onErrorContainer: { default: palette.error10, [DARK]: palette.error90 },
   successContainer: { default: palette.success90, [DARK]: palette.success20 },
