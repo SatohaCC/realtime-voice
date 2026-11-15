@@ -972,28 +972,66 @@ class _SoapSessionCoordinator:
             if self._record.active_generation != self._generation:
                 return False
 
-            processed = self._record.soap_manager.note.processed_transcript_revision
-            all_finals = self._record.transcript_state.finalized_segments
-            new_segments = [seg for seg in all_finals if seg.transcript_revision > processed]
-            if not new_segments:
+            error_attempts = 0
+            drift_retries = 0
+            max_drift_retries = 2
+            status_updating_emitted = False
+            last_exc: SoapLlmClientError | None = None
+            target_rev = 0
+
+            while True:
+                if self._record.active_generation != self._generation:
+                    return False
+
+                processed = self._record.soap_manager.note.processed_transcript_revision
+                all_finals = self._record.transcript_state.finalized_segments
+                new_segments = [seg for seg in all_finals if seg.transcript_revision > processed]
+                if not new_segments:
+                    self._pending_since = None
+                    self._has_speech_final_trigger = False
+                    if status_updating_emitted:
+                        self._record.pending_from_transcript_revision = None
+                        self.enqueue_soap_status(
+                            status="ready",
+                            has_unapplied_transcript=self._record.soap_manager.has_stale_plan_inference(),
+                        )
+                    return True
+
+                target_rev = max(seg.transcript_revision for seg in new_segments)
+                if (
+                    self._failed_extract_revision is not None
+                    and target_rev <= self._failed_extract_revision
+                ):
+                    if status_updating_emitted:
+                        self.enqueue_soap_status(
+                            status="error",
+                            has_unapplied_transcript=True,
+                            message="SOAP の更新に失敗しました。",
+                        )
+                    return False
+
+                # 話者不明 (unknown) だけの新規発話バッチでは LLM 抽出をスキップし、
+                # 手動話者訂正後に改めて抽出できるように既処理リビジョンだけ進める
+                if all(seg.speaker_role == "unknown" for seg in new_segments):
+                    self._record.soap_manager.mark_transcript_processed(target_rev)
+                    self._pending_since = None
+                    self._has_speech_final_trigger = False
+                    self._record.pending_from_transcript_revision = None
+                    self.enqueue_soap_status(
+                        status="ready",
+                        has_unapplied_transcript=self._record.soap_manager.has_stale_plan_inference(),
+                    )
+                    return True
+
+                snapshot_lookup = {(seg.stream_id, seg.segment_id): seg for seg in all_finals}
+                snapshot_sig = {key: seg.segment_revision for key, seg in snapshot_lookup.items()}
                 self._pending_since = None
                 self._has_speech_final_trigger = False
-                return True
+                if not status_updating_emitted:
+                    self._last_llm_start = time.monotonic()
+                    self.enqueue_soap_status(status="updating", has_unapplied_transcript=True)
+                    status_updating_emitted = True
 
-            target_rev = max(seg.transcript_revision for seg in new_segments)
-            if (
-                self._failed_extract_revision is not None
-                and target_rev <= self._failed_extract_revision
-            ):
-                return False
-            snapshot_lookup = {(seg.stream_id, seg.segment_id): seg for seg in all_finals}
-            self._pending_since = None
-            self._has_speech_final_trigger = False
-            self._last_llm_start = time.monotonic()
-            self.enqueue_soap_status(status="updating", has_unapplied_transcript=True)
-
-            last_exc: SoapLlmClientError | None = None
-            for attempt in range(retries + 1):
                 try:
                     raw = await self._llm_client.extract_spoa(
                         self._record.soap_manager.build_extract_payload(
@@ -1040,9 +1078,23 @@ class _SoapSessionCoordinator:
                     if not self.is_current():
                         return False
                     last_exc = exc
+                    # LLM 呼び出し中の話者補正や重複削除でリビジョンが進んだ場合は
+                    # 失敗扱いせず最新スナップショットで再試行する
+                    current_sig = {
+                        (seg.stream_id, seg.segment_id): seg.segment_revision
+                        for seg in self._record.transcript_state.finalized_segments
+                    }
+                    if (
+                        exc.code == "LLM_INVALID_OUTPUT"
+                        and current_sig != snapshot_sig
+                        and drift_retries < max_drift_retries
+                    ):
+                        drift_retries += 1
+                        continue
                     non_retryable = exc.code in {"LLM_INPUT_TOO_LARGE", "LLM_NOT_CONFIGURED"}
-                    if non_retryable or attempt >= retries or self._stopping:
+                    if non_retryable or error_attempts >= retries or self._stopping:
                         break
+                    error_attempts += 1
 
             self._failed_extract_revision = target_rev
             message = str(last_exc) if last_exc is not None else "SOAP の更新に失敗しました。"

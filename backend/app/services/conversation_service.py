@@ -3,6 +3,7 @@ import re
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
+from threading import Lock
 
 from app.core.config import settings
 from app.schemas.soap import SpeakerRole, TranscriptSegmentModel, TranscriptStatus
@@ -47,10 +48,13 @@ class BackendAudioPcmRingBuffer:
         )
         self._end_sec = 0.0
         self._chunks: deque[_PcmChunk] = deque()
+        # asyncio イベントループ側の append と to_thread 側の参照で deque 競合を防ぐ
+        self._lock = Lock()
 
     def clear(self) -> None:
-        self._end_sec = 0.0
-        self._chunks.clear()
+        with self._lock:
+            self._end_sec = 0.0
+            self._chunks.clear()
 
     def append_pcm16(
         self,
@@ -72,31 +76,36 @@ class BackendAudioPcmRingBuffer:
             if levels is not None
             else compute_pcm16_channel_rms(pcm16_bytes[:usable_bytes], channels=channels)
         )
-        start = self._end_sec
-        self._end_sec += duration
-        self._chunks.append(
-            _PcmChunk(
-                start=start,
-                end=self._end_sec,
-                pcm16_bytes=pcm16_bytes[:usable_bytes],
-                levels=resolved_levels,
-                channels=channels,
-                sample_rate=sample_rate,
+        with self._lock:
+            start = self._end_sec
+            self._end_sec += duration
+            self._chunks.append(
+                _PcmChunk(
+                    start=start,
+                    end=self._end_sec,
+                    pcm16_bytes=pcm16_bytes[:usable_bytes],
+                    levels=resolved_levels,
+                    channels=channels,
+                    sample_rate=sample_rate,
+                )
             )
-        )
-        cutoff = self._end_sec - self._max_history_seconds
-        while self._chunks and self._chunks[0].end < cutoff:
-            self._chunks.popleft()
+            cutoff = self._end_sec - self._max_history_seconds
+            while self._chunks and self._chunks[0].end < cutoff:
+                self._chunks.popleft()
 
     def slice_pcm16(self, start_sec: float, end_sec: float) -> tuple[bytes, int, int] | None:
         """指定された時刻範囲 [start_sec, end_sec] に対応する PCM16 バイト列を切り出す。"""
-        if end_sec <= start_sec or not self._chunks:
+        if end_sec <= start_sec:
             return None
+        with self._lock:
+            if not self._chunks:
+                return None
+            chunks = list(self._chunks)
         parts: list[bytes] = []
         channels = 0
         sample_rate = 0
         covered = 0.0
-        for chunk in self._chunks:
+        for chunk in chunks:
             overlap_start = max(start_sec, chunk.start)
             overlap_end = min(end_sec, chunk.end)
             if overlap_end <= overlap_start:
@@ -121,10 +130,12 @@ class BackendAudioPcmRingBuffer:
 
     def estimate_noise_floor(self) -> tuple[float, float]:
         """直近チャンクの下位 25% RMS からチャンネル別の暗騒音フロアを推定する。"""
-        if len(self._chunks) < 4:
-            return (0.002, 0.002)
-        ch0 = sorted(chunk.levels[0] for chunk in self._chunks)
-        ch1 = sorted(chunk.levels[1] for chunk in self._chunks)
+        with self._lock:
+            if len(self._chunks) < 4:
+                return (0.002, 0.002)
+            chunks = list(self._chunks)
+        ch0 = sorted(chunk.levels[0] for chunk in chunks)
+        ch1 = sorted(chunk.levels[1] for chunk in chunks)
         q_idx = max(0, min(len(ch0) - 1, len(ch0) // 4))
         floor0 = max(0.001, min(0.015, ch0[q_idx]))
         floor1 = max(0.001, min(0.015, ch1[q_idx]))
@@ -138,10 +149,12 @@ class BackendAudioLevelHistory:
         self._max_history_seconds = max_history_seconds
         self._end_sec = 0.0
         self._chunks: deque[_AudioChunk] = deque()
+        self._lock = Lock()
 
     def reset_timeline(self) -> None:
-        self._end_sec = 0.0
-        self._chunks.clear()
+        with self._lock:
+            self._end_sec = 0.0
+            self._chunks.clear()
 
     def append_pcm16(self, pcm16_bytes: bytes, *, channels: int, sample_rate: int) -> None:
         if channels not in {1, 2} or sample_rate <= 0:
@@ -156,20 +169,23 @@ class BackendAudioLevelHistory:
     def append_levels(self, *, duration_sec: float, levels: tuple[float, float]) -> None:
         if duration_sec <= 0:
             return
-        start = self._end_sec
-        self._end_sec += duration_sec
-        self._chunks.append(_AudioChunk(start=start, end=self._end_sec, levels=levels))
-        cutoff = self._end_sec - self._max_history_seconds
-        while self._chunks and self._chunks[0].end < cutoff:
-            self._chunks.popleft()
+        with self._lock:
+            start = self._end_sec
+            self._end_sec += duration_sec
+            self._chunks.append(_AudioChunk(start=start, end=self._end_sec, levels=levels))
+            cutoff = self._end_sec - self._max_history_seconds
+            while self._chunks and self._chunks[0].end < cutoff:
+                self._chunks.popleft()
 
     def levels_for(self, start_sec: float, end_sec: float) -> tuple[float, float]:
         if end_sec <= start_sec:
             return (0.0, 0.0)
+        with self._lock:
+            chunks = list(self._chunks)
         coverage = 0.0
         energy_0 = 0.0
         energy_1 = 0.0
-        for chunk in self._chunks:
+        for chunk in chunks:
             overlap = max(0.0, min(end_sec, chunk.end) - max(start_sec, chunk.start))
             if overlap <= 0.0:
                 continue

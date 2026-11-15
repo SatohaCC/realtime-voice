@@ -1539,3 +1539,162 @@ def test_rest_delete_conversation_segment_reconciles_soap_after_stop() -> None:
         assert resp_missing.status_code == 404
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_concurrent_speaker_override_during_extract_retries_with_fresh_snapshot() -> None:
+    from app.services.conversation_service import DeepgramTranscriptInput
+
+    class _ConcurrentMutationLlmClient(FakeSoapLlmClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.extract_calls = 0
+            self.coordinator: _SoapSessionCoordinator | None = None
+            self.target_stream_id = ""
+            self.target_segment_id = ""
+
+        async def extract_spoa(self, payload: dict[str, Any]) -> dict[str, Any]:
+            self.extract_calls += 1
+            if self.extract_calls == 1 and self.coordinator is not None:
+                # 1回目の LLM 呼び出し中にクライアントから話者手動訂正が入った状況を再現する
+                self.coordinator.handle_segment_speaker_override(
+                    {
+                        "type": "UpdateSegmentSpeaker",
+                        "stream_id": self.target_stream_id,
+                        "segment_id": self.target_segment_id,
+                        "speaker_role": "patient",
+                    }
+                )
+                return {
+                    "operations": [
+                        {
+                            "section": "S",
+                            "action": "add",
+                            "text": "昨日から頭痛が続いている。",
+                            "evidence_refs": [
+                                {
+                                    "stream_id": self.target_stream_id,
+                                    "segment_id": self.target_segment_id,
+                                    "segment_revision": 1,
+                                    "quote": "昨日から頭が痛いです",
+                                    "speaker_role": "patient",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            return await super().extract_spoa(payload)
+
+    async def _run() -> None:
+        registry = ConversationSessionRegistry()
+        record = registry.get_or_create(user_id="user-race", conversation_id="conv-race")
+        stream_id = record.transcript_state.start_stream("s-race")
+        queue = BoundedWsOutboundQueue(maxsize=64)
+        llm = _ConcurrentMutationLlmClient()
+        coordinator = _SoapSessionCoordinator(
+            record=record,
+            stream_id=stream_id,
+            generation=record.active_generation,
+            queue=queue,
+            llm_client=llm,
+            timing=_fast_timing(),
+        )
+        # 初期誤判定 (channel 0 = pharmacist) を抽出中に手動で patient へ補正する
+        res = record.transcript_state.apply_deepgram_event(
+            DeepgramTranscriptInput(0, "昨日から頭が痛いです", True, True, 0.2, 1.0, 0.95),
+        )
+        assert res.segment is not None
+        llm.coordinator = coordinator
+        llm.target_stream_id = stream_id
+        llm.target_segment_id = res.segment.segment_id
+
+        ok = await coordinator._run_extract_step(retries=0)
+        assert ok is True
+        assert llm.extract_calls == 2
+        assert coordinator._failed_extract_revision is None
+        assert record.soap_status == "ready"
+        assert len(record.soap_manager.note.sections.S.items) == 1
+
+    asyncio.run(_run())
+
+
+def test_unknown_only_batch_skips_llm_until_speaker_assigned() -> None:
+    from app.services.conversation_service import DeepgramTranscriptInput
+
+    async def _run() -> None:
+        registry = ConversationSessionRegistry()
+        record = registry.get_or_create(user_id="user-unk", conversation_id="conv-unk-skip")
+        stream_id = record.transcript_state.start_stream("s-unk")
+        queue = BoundedWsOutboundQueue(maxsize=64)
+        llm = _CountingLlmClient()
+        coordinator = _SoapSessionCoordinator(
+            record=record,
+            stream_id=stream_id,
+            generation=record.active_generation,
+            queue=queue,
+            llm_client=llm,
+            timing=_fast_timing(),
+        )
+        res = record.transcript_state.apply_deepgram_event(
+            DeepgramTranscriptInput(1, "昨日から頭が痛いです", True, True, 0.2, 1.0, 0.95),
+        )
+        assert res.segment is not None
+        record.transcript_state.override_segment_speaker(
+            stream_id=stream_id,
+            segment_id=res.segment.segment_id,
+            speaker_role="unknown",
+        )
+
+        ok_unknown = await coordinator._run_extract_step(retries=0)
+        assert ok_unknown is True
+        assert llm.extract_calls == 0
+        assert (
+            record.soap_manager.note.processed_transcript_revision
+            == record.transcript_state.transcript_revision
+        )
+        assert record.soap_status == "ready"
+
+        coordinator.handle_segment_speaker_override(
+            {
+                "type": "UpdateSegmentSpeaker",
+                "stream_id": stream_id,
+                "segment_id": res.segment.segment_id,
+                "speaker_role": "patient",
+            }
+        )
+        ok_patient = await coordinator._run_extract_step(retries=0)
+        assert ok_patient is True
+        assert llm.extract_calls == 1
+        assert len(record.soap_manager.note.sections.S.items) == 1
+
+    asyncio.run(_run())
+
+
+def test_audio_ring_and_level_history_are_thread_safe_under_concurrent_rw() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services.conversation_service import (
+        BackendAudioLevelHistory,
+        BackendAudioPcmRingBuffer,
+    )
+
+    ring = BackendAudioPcmRingBuffer(max_history_seconds=5.0)
+    levels = BackendAudioLevelHistory(max_history_seconds=5.0)
+    pcm_chunk = b"\x00\x10\x00\x20" * 320  # 320 frames @ 16kHz = 20ms stereo
+
+    def _writer() -> None:
+        for _ in range(400):
+            ring.append_pcm16(pcm_chunk, channels=2, sample_rate=16000)
+            levels.append_pcm16(pcm_chunk, channels=2, sample_rate=16000)
+
+    def _reader() -> None:
+        for idx in range(400):
+            t = (idx % 50) * 0.02
+            ring.slice_pcm16(t, t + 0.1)
+            ring.estimate_noise_floor()
+            levels.levels_for(t, t + 0.1)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_w = pool.submit(_writer)
+        f_r = pool.submit(_reader)
+        f_w.result()
+        f_r.result()
