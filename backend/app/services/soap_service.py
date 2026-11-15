@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from app.clients.soap_llm_client import SoapLlmClientError, SoapLlmClientProtocol
 from app.schemas.soap import (
-    LlmExtractSpoaResult,
+    LlmExtractSoapResult,
     LlmFinalizeAResult,
     PlanItemRefModel,
     SoapEvidenceModel,
@@ -56,6 +56,19 @@ class SoapStateManager:
             processed_transcript_revision,
         )
 
+    def reset_for_rebuild(self) -> SoapApplyOutcome:
+        """無効化・再有効化後に古い要約を撤回し、有効な原文だけで再生成する。"""
+        retracted: list[str] = []
+        for key in ("S", "O", "A", "P"):
+            section = self._section_of(self._note, key)
+            retracted.extend(item.item_id for item in section.items)
+            section.items = []
+            section.revision += 1
+        self._note.sections.A.derived_from_plan_revision = None
+        self._note.processed_transcript_revision = 0
+        self._note.revision += 1
+        return SoapApplyOutcome(self.note, [], retracted, 1, 0)
+
     def build_extract_payload(
         self,
         *,
@@ -63,7 +76,7 @@ class SoapStateManager:
         all_final_segments: list[TranscriptSegmentModel],
         max_context_segments: int = 6,
     ) -> dict[str, Any]:
-        """会話中 extract_spoa 用の入力辞書を構築する（根拠発話と直近文脈も含める）。"""
+        """会話中 extract_soap 用の入力辞書を構築する（根拠発話と直近文脈も含める）。"""
         referenced_keys: set[tuple[str, str]] = set()
         for section in (
             self._note.sections.S,
@@ -117,7 +130,7 @@ class SoapStateManager:
             ],
         }
 
-    async def run_extract_spoa(
+    async def run_extract_soap(
         self,
         *,
         llm_client: SoapLlmClientProtocol,
@@ -126,13 +139,13 @@ class SoapStateManager:
         current_segments_lookup: dict[tuple[str, str], TranscriptSegmentModel],
         target_processed_transcript_revision: int,
     ) -> SoapApplyOutcome:
-        """extract_spoa を呼び出し、根拠の有効性を検証してから原子適用する。"""
+        """extract_soap を呼び出し、根拠の有効性を検証してから原子適用する。"""
         payload = self.build_extract_payload(
             new_segments=new_segments,
             all_final_segments=list(segments_snapshot_lookup.values()),
         )
-        raw_result = await llm_client.extract_spoa(payload)
-        return self.apply_extract_spoa_raw(
+        raw_result = await llm_client.extract_soap(payload)
+        return self.apply_extract_soap_raw(
             raw_result=raw_result,
             segments_lookup=current_segments_lookup,
             processed_transcript_revision=target_processed_transcript_revision,
@@ -163,7 +176,7 @@ class SoapStateManager:
             expected_plan_items=base_plan_items,
         )
 
-    def apply_extract_spoa_raw(
+    def apply_extract_soap_raw(
         self,
         *,
         raw_result: dict[str, Any],
@@ -172,7 +185,7 @@ class SoapStateManager:
     ) -> SoapApplyOutcome:
         """構造化出力を検証し、正当な差分だけを 1 回の SOAP 更新として適用する。"""
         try:
-            parsed = LlmExtractSpoaResult.model_validate(raw_result)
+            parsed = LlmExtractSoapResult.model_validate(raw_result)
         except ValidationError as exc:
             raise SoapLlmClientError(
                 "SOAP 生成モデルの出力スキーマが不正です。",
@@ -530,6 +543,7 @@ class SoapStateManager:
                     if (
                         seg is None
                         or seg.status == "interim"
+                        or seg.disabled
                         or not self._quote_matches(ev.quote, seg.text)
                     ):
                         evidence_changed = True
@@ -632,6 +646,7 @@ class SoapStateManager:
             if (
                 seg is None
                 or seg.status == "interim"
+                or seg.disabled
                 or seg.segment_revision != ref.segment_revision
             ):
                 return []
@@ -714,6 +729,7 @@ class SoapStateManager:
             if (
                 seg is None
                 or seg.status == "interim"
+                or seg.disabled
                 or not SoapStateManager._quote_matches(ev.quote, seg.text)
             ):
                 continue

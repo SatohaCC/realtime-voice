@@ -44,19 +44,22 @@ class SegmentSpeakerOverrideFrame(BaseModel):
     speaker_role: SpeakerRole
 
 
-class DeleteSegmentFrame(BaseModel):
-    """画面からの手動操作で重複・不要な確定発話を削除する制御フレーム。"""
+class SetSegmentEnabledFrame(BaseModel):
+    """原文を保持したまま、確定発話の根拠としての有効性を変更する。"""
 
-    type: Literal["DeleteSegment"]
+    type: Literal["SetSegmentEnabled"]
     stream_id: str = Field(min_length=1, max_length=128)
     segment_id: str = Field(min_length=1, max_length=128)
+    enabled: bool
 
 
-class DeleteConversationSegmentResponse(BaseModel):
-    """REST 経由での確定発話削除と SOAP 再整合結果。"""
+class SetConversationSegmentEnabledResponse(BaseModel):
+    """REST 経由での発話有効性変更と SOAP 再生成結果。"""
 
     conversation_id: str
     segment: TranscriptSegmentModel
     soap: SoapNoteModel
     changed_item_ids: list[str] = Field(default_factory=list)
     retracted_item_ids: list[str] = Field(default_factory=list)
+    soap_status: str = "ready"
+    has_unapplied_transcript: bool = False

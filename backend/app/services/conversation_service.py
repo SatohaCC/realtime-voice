@@ -495,6 +495,7 @@ def is_crosstalk_duplicate(
             segment.stream_id != stream_id
             or segment.channel_index != other_index
             or segment.status == "interim"
+            or segment.disabled
         ):
             continue
         inter = max(0.0, min(segment.end_sec, end_sec) - max(segment.start_sec, start_sec))
@@ -554,6 +555,7 @@ class ConversationTranscriptState:
         self._segment_index_by_key: dict[tuple[str, str], int] = {}
         self._suppressed_candidates: list[TranscriptSegmentModel] = []
         self._active_interim_ids: dict[tuple[str, int], str] = {}
+        self._inferred_roles: dict[tuple[str, str], SpeakerRole] = {}
         self._manual_speaker_overrides: set[tuple[str, str]] = set()
         self._audio_history = BackendAudioLevelHistory()
         self._pcm_buffer = BackendAudioPcmRingBuffer(max_history_seconds=pcm_history_seconds)
@@ -573,7 +575,11 @@ class ConversationTranscriptState:
 
     @property
     def finalized_segments(self) -> list[TranscriptSegmentModel]:
-        return [segment for segment in self._segments if segment.status != "interim"]
+        return [
+            segment
+            for segment in self._segments
+            if segment.status != "interim" and not segment.disabled
+        ]
 
     def set_pharmacist_profile(
         self,
@@ -646,6 +652,7 @@ class ConversationTranscriptState:
         speaker_role: SpeakerRole,
     ) -> TranscriptSegmentModel | None:
         """確定済み発話の話者ロールを手動訂正し、自動再訂正対象から保護する。"""
+        speaker_role = "patient" if speaker_role == "unknown" else speaker_role
         key = (stream_id, segment_id)
         idx = self._segment_index_by_key.get(key)
         if idx is None:
@@ -653,6 +660,7 @@ class ConversationTranscriptState:
         existing = self._segments[idx]
         if existing.status == "interim":
             return None
+        self._inferred_roles[key] = speaker_role
         self._manual_speaker_overrides.add(key)
         if existing.speaker_role == speaker_role:
             return None
@@ -669,25 +677,32 @@ class ConversationTranscriptState:
         self._segments[idx] = updated
         return updated
 
-    def delete_segment(
+    def set_segment_enabled(
         self,
         *,
         stream_id: str,
         segment_id: str,
+        enabled: bool,
     ) -> TranscriptSegmentModel | None:
-        """重複・不要な確定済み発話を会話レジストリから削除する。"""
-        key = (stream_id, segment_id)
-        idx = self._segment_index_by_key.get(key)
-        if idx is None:
+        """原文・時刻・IDを保持したまま無効化または再有効化する。"""
+        idx = self._segment_index_by_key.get((stream_id, segment_id))
+        if idx is None or self._segments[idx].status == "interim":
             return None
         existing = self._segments[idx]
-        if existing.status == "interim":
-            return None
-        self._segments.pop(idx)
-        self._manual_speaker_overrides.discard(key)
-        self._rebuild_index()
+        self._manual_speaker_overrides.add((stream_id, segment_id))
+        if existing.disabled == (not enabled):
+            return existing
         self.transcript_revision += 1
-        return existing
+        updated = existing.model_copy(
+            update={
+                "disabled": not enabled,
+                "segment_revision": existing.segment_revision + 1,
+                "transcript_revision": self.transcript_revision,
+                "status": "refined",
+            }
+        )
+        self._segments[idx] = updated
+        return updated
 
     def speaker_embedding_interval(self, event: DeepgramTranscriptInput) -> tuple[float, float]:
         """近接した短発話を蓄積できる場合は、再照合対象全体の区間を返す。"""
@@ -719,7 +734,7 @@ class ConversationTranscriptState:
         finals = [
             s
             for s in self._segments
-            if s.stream_id == self._current_stream_id and s.status != "interim"
+            if s.stream_id == self._current_stream_id and s.status != "interim" and not s.disabled
         ]
         for seg in reversed(finals):
             if seg.end_sec > next_start:
@@ -728,7 +743,8 @@ class ConversationTranscriptState:
                 continue
             if (
                 seg.channel_index != channel
-                or seg.speaker_role != "unknown"
+                or self._inferred_roles.get((seg.stream_id, seg.segment_id), seg.speaker_role)
+                != "unknown"
                 or (seg.stream_id, seg.segment_id) in self._manual_speaker_overrides
                 or seg.end_sec - seg.start_sec >= thresholds.min_embed_sec
                 or not 0 <= next_start - seg.end_sec <= 0.35
@@ -809,8 +825,8 @@ class ConversationTranscriptState:
         speaker_role, speaker_label = SPEAKER_ROLE_BY_CHANNEL[channel]
         if not single_stream_diarized and self._speaker_tracker.voiceprint_requested:
             # 声紋判定前の途中結果や登録拒否後に、マイク番号由来の誤った話者名を出さない
-            speaker_role = "unknown"
-            speaker_label = SPEAKER_LABEL_BY_ROLE["unknown"]
+            speaker_role = "patient"
+            speaker_label = SPEAKER_LABEL_BY_ROLE["patient"]
         # 1ch ミックスモードでは同一ストリーム内で話者が切り替わってもゴースト interim を残さない
         interim_key = (target_stream, 0 if single_stream_diarized else channel)
         active_interim_id = self._active_interim_ids.get(interim_key)
@@ -865,6 +881,7 @@ class ConversationTranscriptState:
                     for evict_idx in sorted(evict_indices, reverse=True):
                         evicted = self._segments.pop(evict_idx)
                         self._suppressed_candidates.append(evicted)
+                        self._inferred_roles.pop((evicted.stream_id, evicted.segment_id), None)
                         removed_segments.append(evicted)
                     self._rebuild_index()
             elif is_crosstalk_duplicate(
@@ -890,6 +907,9 @@ class ConversationTranscriptState:
                     event=event,
                 )
 
+        inferred_role = speaker_role
+        speaker_role = "patient" if speaker_role == "unknown" else speaker_role
+        speaker_label = SPEAKER_LABEL_BY_ROLE[speaker_role]
         next_status: TranscriptStatus = "final" if event.is_final else "interim"
         self.transcript_revision += 1
 
@@ -936,6 +956,7 @@ class ConversationTranscriptState:
             if not event.is_final:
                 self._active_interim_ids[interim_key] = segment_id
 
+        self._inferred_roles[(target_stream, result_segment.segment_id)] = inferred_role
         self._sort_segments_preserving_audio_order()
         refined: tuple[TranscriptSegmentModel, ...] = ()
         if (
@@ -979,6 +1000,7 @@ class ConversationTranscriptState:
                 seg.stream_id != target_stream
                 or seg.channel_index != other_index
                 or seg.status == "interim"
+                or seg.disabled
             ):
                 continue
             ov_start = max(seg.start_sec, start_sec)
@@ -990,13 +1012,20 @@ class ConversationTranscriptState:
             )
             if max(overlap_levels) <= 0.0:
                 overlap_levels = levels
+            comparison = seg.model_copy(
+                update={
+                    "speaker_role": self._inferred_roles.get(
+                        (seg.stream_id, seg.segment_id), seg.speaker_role
+                    )
+                }
+            )
             if not _is_voiceprint_channel_duplicate(
                 incoming_text=text,
                 incoming_start_sec=start_sec,
                 incoming_end_sec=end_sec,
                 incoming_role=speaker_role,
                 incoming_channel=channel,
-                existing=seg,
+                existing=comparison,
                 overlap_levels=overlap_levels,
             ):
                 continue
@@ -1005,9 +1034,11 @@ class ConversationTranscriptState:
                 incoming_role=speaker_role,
                 incoming_confidence=confidence,
                 incoming_text=text,
-                existing=seg,
+                existing=comparison,
                 overlap_levels=overlap_levels,
             ):
+                if (seg.stream_id, seg.segment_id) in self._manual_speaker_overrides:
+                    return True, []
                 evict_indices.append(idx)
             else:
                 return True, []
@@ -1039,8 +1070,10 @@ class ConversationTranscriptState:
             segment_revision=1,
             transcript_revision=max(1, self.transcript_revision),
             channel_index=1 if channel == 1 else 0,
-            speaker_role=speaker_role,
-            speaker_label=speaker_label,
+            speaker_role="patient" if speaker_role == "unknown" else speaker_role,
+            speaker_label=SPEAKER_LABEL_BY_ROLE[
+                "patient" if speaker_role == "unknown" else speaker_role
+            ],
             text=text,
             status="final",
             start_sec=max(0.0, event.start_sec),
@@ -1048,6 +1081,8 @@ class ConversationTranscriptState:
             confidence=max(0.0, min(1.0, event.confidence)),
             speech_final=event.speech_final,
         )
+        if active_interim_id is not None:
+            self._inferred_roles.pop((target_stream, active_interim_id), None)
         self._suppressed_candidates.append(archived)
         return TranscriptApplyOutcome(
             segment=removed_segment,
@@ -1080,6 +1115,7 @@ class ConversationTranscriptState:
                 }
             )
             self._segments[idx] = updated
+            self._inferred_roles[(target_stream, updated.segment_id)] = anchor.speaker_role
             refined.append(updated)
         return tuple(refined)
 

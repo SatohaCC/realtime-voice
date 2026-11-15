@@ -101,13 +101,13 @@ class _CountingLlmClient(FakeSoapLlmClient):
         self._delay_seconds = delay_seconds
         self._fail_extract = fail_extract
 
-    async def extract_spoa(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.extract_calls += 1
         if self._delay_seconds > 0:
             await asyncio.sleep(self._delay_seconds)
         if self._fail_extract:
             raise SoapLlmClientError("LLM unavailable", code="LLM_UNAVAILABLE")
-        return await super().extract_spoa(payload)
+        return await super().extract_soap(payload)
 
     async def finalize_a_from_p(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.finalize_calls += 1
@@ -222,7 +222,7 @@ def test_short_voiceprint_pool_uses_selected_audio_and_emits_refinement() -> Non
                 duration=0.35,
             )
         )
-        assert state.finalized_segments[0].speaker_role == "unknown"
+        assert state.finalized_segments[0].speaker_role == "patient"
         assert speaker.received == []
         await coordinator.handle_deepgram_message_async(
             _dg_result(
@@ -267,7 +267,7 @@ def test_affirmative_reply_reaches_llm_with_processed_question_context() -> None
             super().__init__()
             self.payloads: list[dict[str, Any]] = []
 
-        async def extract_spoa(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
             self.payloads.append(payload)
             return {"operations": []}
 
@@ -426,7 +426,7 @@ def test_failed_batch_waits_for_new_input_instead_of_restarting_retries(
         class Failing(FakeSoapLlmClient):
             calls = 0
 
-            async def extract_spoa(self, payload: dict[str, Any]) -> dict[str, Any]:
+            async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
                 self.calls += 1
                 raise SoapLlmClientError("生成失敗", code=code)
 
@@ -1382,7 +1382,7 @@ def test_ws_manual_speaker_override_updates_segment_and_reconciles_soap() -> Non
             and ev["segment"]["status"] == "refined"
         ]
         assert refined_transcript
-        assert refined_transcript[-1]["segment"]["speaker_role"] == "unknown"
+        assert refined_transcript[-1]["segment"]["speaker_role"] == "patient"
 
         soap_updates = [ev for ev in events if ev.get("type") == "SoapUpdated"]
         assert any(ev.get("retracted_item_ids") for ev in soap_updates)
@@ -1441,7 +1441,8 @@ def test_ws_delete_segment_removes_utterance_and_reconciles_soap() -> None:
         await ws._incoming.put(
             json.dumps(
                 {
-                    "type": "DeleteSegment",
+                    "type": "SetSegmentEnabled",
+                    "enabled": False,
                     "stream_id": seg.stream_id,
                     "segment_id": seg.segment_id,
                 }
@@ -1463,7 +1464,7 @@ def test_ws_delete_segment_removes_utterance_and_reconciles_soap() -> None:
             ev
             for ev in events
             if ev.get("type") == "TranscriptUpdated"
-            and ev.get("removed") is True
+            and ev["segment"].get("disabled") is True
             and ev["segment"]["segment_id"] == seg.segment_id
         ]
         assert len(removed_events) == 1
@@ -1492,7 +1493,7 @@ def test_rest_delete_conversation_segment_reconciles_soap_after_stop() -> None:
         DeepgramTranscriptInput(0, "毎食後に服用してください", True, True, 0.1, 1.0, 0.95),
     )
     assert res.segment is not None
-    record.soap_manager.apply_extract_spoa_raw(
+    record.soap_manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -1523,18 +1524,31 @@ def test_rest_delete_conversation_segment_reconciles_soap_after_stop() -> None:
     )
     try:
         client = TestClient(app)
-        resp = client.delete(
-            f"/api/transcriptions/conversations/conv-rest-del/segments?stream_id={stream_id}&segment_id={res.segment.segment_id}"
+        resp = client.patch(
+            "/api/transcriptions/conversations/conv-rest-del/segments",
+            json={
+                "type": "SetSegmentEnabled",
+                "stream_id": stream_id,
+                "segment_id": res.segment.segment_id,
+                "enabled": False,
+            },
         )
         assert resp.status_code == 200
         body = resp.json()
         assert body["conversation_id"] == "conv-rest-del"
         assert body["segment"]["segment_id"] == res.segment.segment_id
-        assert body["retracted_item_ids"]
+        assert body["segment"]["disabled"] is True
+        assert record.transcript_state.segments[0].text == res.segment.text
         assert body["soap"]["sections"]["P"]["items"] == []
 
-        resp_missing = client.delete(
-            f"/api/transcriptions/conversations/conv-rest-del/segments?stream_id={stream_id}&segment_id={res.segment.segment_id}"
+        resp_missing = client.patch(
+            "/api/transcriptions/conversations/conv-rest-del/segments",
+            json={
+                "type": "SetSegmentEnabled",
+                "stream_id": stream_id,
+                "segment_id": "missing",
+                "enabled": False,
+            },
         )
         assert resp_missing.status_code == 404
     finally:
@@ -1552,7 +1566,7 @@ def test_concurrent_speaker_override_during_extract_retries_with_fresh_snapshot(
             self.target_stream_id = ""
             self.target_segment_id = ""
 
-        async def extract_spoa(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
             self.extract_calls += 1
             if self.extract_calls == 1 and self.coordinator is not None:
                 # 1回目の LLM 呼び出し中にクライアントから話者手動訂正が入った状況を再現する
@@ -1582,7 +1596,7 @@ def test_concurrent_speaker_override_during_extract_retries_with_fresh_snapshot(
                         }
                     ]
                 }
-            return await super().extract_spoa(payload)
+            return await super().extract_soap(payload)
 
     async def _run() -> None:
         registry = ConversationSessionRegistry()
@@ -1646,7 +1660,7 @@ def test_unknown_only_batch_skips_llm_until_speaker_assigned() -> None:
 
         ok_unknown = await coordinator._run_extract_step(retries=0)
         assert ok_unknown is True
-        assert llm.extract_calls == 0
+        assert llm.extract_calls == 1
         assert (
             record.soap_manager.note.processed_transcript_revision
             == record.transcript_state.transcript_revision

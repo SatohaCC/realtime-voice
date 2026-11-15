@@ -275,7 +275,7 @@ def test_voiceprint_interims_and_rejected_profiles_do_not_guess_roles(valid_prof
             DeepgramTranscriptInput(1, "飲み方を確認します", is_final, is_final, 0, 2, 0.9)
         )
         assert result.segment is not None
-        assert result.segment.speaker_role == "unknown"
+        assert result.segment.speaker_role == "patient"
 
 
 def test_voiceprint_crosstalk_integration_and_delayed_short_refinement() -> None:
@@ -338,7 +338,7 @@ def test_voiceprint_crosstalk_integration_and_delayed_short_refinement() -> None
         segment_embedding=None,
     )
     assert short_out.segment is not None
-    assert short_out.segment.speaker_role == "unknown"
+    assert short_out.segment.speaker_role == "patient"
 
     anchor_out = state_ref.apply_deepgram_event(
         DeepgramTranscriptInput(1, "毎朝しっかり飲めています", True, True, 1.1, 2.8, 0.95),
@@ -348,7 +348,7 @@ def test_voiceprint_crosstalk_integration_and_delayed_short_refinement() -> None
     assert anchor_out.segment.speaker_role == "patient"
     # 直後の話者が判明しても、音量が拮抗した別区間の話者を推測で変更しない
     assert anchor_out.refined_segments == ()
-    assert state_ref.finalized_segments[0].speaker_role == "unknown"
+    assert state_ref.finalized_segments[0].speaker_role == "patient"
 
 
 def test_accumulated_short_audio_refines_only_with_embedding_and_resets_on_stream() -> None:
@@ -363,7 +363,7 @@ def test_accumulated_short_audio_refines_only_with_embedding_and_resets_on_strea
     second = DeepgramTranscriptInput(0, "そうです", True, True, 0.4, 0.75, 0.9)
     assert not state.needs_speaker_embedding(first)
     state.apply_deepgram_event(first)
-    assert state.finalized_segments[0].speaker_role == "unknown"
+    assert state.finalized_segments[0].speaker_role == "patient"
     assert state.needs_speaker_embedding(second)
     assert state.speaker_embedding_interval(second) == (0.0, 0.75)
     result = state.apply_deepgram_event(second, segment_embedding=vec)
@@ -453,7 +453,7 @@ def test_voiceprint_deduplicates_same_speaker_bleed_regardless_of_order_length_a
         segment_embedding=None,
     )
     assert c1_unknown.segment is not None
-    assert c1_unknown.segment.speaker_role == "unknown"
+    assert c1_unknown.segment.speaker_role == "patient"
 
     c0_pharm = state.apply_deepgram_event(
         DeepgramTranscriptInput(0, "できてますか今お薬は", True, True, 5.1, 6.8, 0.95),
@@ -538,19 +538,16 @@ def test_word_clause_split_and_manual_speaker_override_protection() -> None:
         segment_embedding=None,
     )
     assert short_res.segment is not None
-    assert short_res.segment.speaker_role == "unknown"
+    assert short_res.segment.speaker_role == "patient"
 
-    # 手動で unknown に確定保護したあとは、後続の自動蓄積再判定で上書きされない
-    # まず patient へ手動変更 → 再び unknown へ手動訂正
+    # 患者フォールバックを薬剤師へ手動変更し、患者へ戻した後も自動訂正から保護する
     moved = state.override_segment_speaker(
         stream_id="s1",
         segment_id=short_res.segment.segment_id,
-        speaker_role="patient",
+        speaker_role="pharmacist",
     )
     assert moved is not None
-    assert moved.speaker_role == "patient"
-    assert moved.speaker_label == "患者"
-    assert moved.status == "refined"
+    assert moved.speaker_role == "pharmacist"
     assert moved.segment_revision == 2
 
     back = state.override_segment_speaker(
@@ -559,7 +556,7 @@ def test_word_clause_split_and_manual_speaker_override_protection() -> None:
         speaker_role="unknown",
     )
     assert back is not None
-    assert back.speaker_role == "unknown"
+    assert back.speaker_role == "patient"
 
     next_res = state.apply_deepgram_event(
         DeepgramTranscriptInput(1, "大丈夫です", True, True, 0.5, 0.85, 0.95),
@@ -576,7 +573,12 @@ def test_delete_segment_removes_final_and_rejects_interim() -> None:
         DeepgramTranscriptInput(0, "こんに", False, False, 0.0, 0.2, 0.9),
     )
     assert interim_res.segment is not None
-    assert state.delete_segment(stream_id="s1", segment_id=interim_res.segment.segment_id) is None
+    assert (
+        state.set_segment_enabled(
+            enabled=False, stream_id="s1", segment_id=interim_res.segment.segment_id
+        )
+        is None
+    )
 
     final_res = state.apply_deepgram_event(
         DeepgramTranscriptInput(0, "こんにちは。", True, True, 0.0, 0.4, 0.95),
@@ -588,8 +590,13 @@ def test_delete_segment_removes_final_and_rejects_interim() -> None:
     assert dup_res.segment is not None
     assert len(state.finalized_segments) == 2
 
-    deleted = state.delete_segment(stream_id="s1", segment_id=dup_res.segment.segment_id)
+    deleted = state.set_segment_enabled(
+        enabled=False, stream_id="s1", segment_id=dup_res.segment.segment_id
+    )
     assert deleted is not None
     assert deleted.segment_id == dup_res.segment.segment_id
     assert [s.segment_id for s in state.finalized_segments] == [final_res.segment.segment_id]
-    assert state.delete_segment(stream_id="s1", segment_id=dup_res.segment.segment_id) is None
+    repeated = state.set_segment_enabled(
+        enabled=False, stream_id="s1", segment_id=dup_res.segment.segment_id
+    )
+    assert repeated is not None and repeated.disabled

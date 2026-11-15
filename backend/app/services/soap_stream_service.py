@@ -3,7 +3,7 @@ import json
 import time
 import uuid
 from collections import OrderedDict, deque
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
@@ -36,8 +36,9 @@ from app.schemas.soap import (
     TranscriptUpdatedEvent,
 )
 from app.schemas.speaker import (
-    DeleteSegmentFrame,
     SegmentSpeakerOverrideFrame,
+    SetConversationSegmentEnabledResponse,
+    SetSegmentEnabledFrame,
     SpeakerProfileAckEvent,
     SpeakerProfileFrame,
 )
@@ -124,6 +125,7 @@ class ConversationSessionRecord:
     conversation_id: str
     transcript_state: ConversationTranscriptState
     soap_manager: SoapStateManager
+    llm_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     event_seq: int = 0
     active_generation: int = 0
     superseded: asyncio.Event = field(default_factory=asyncio.Event)
@@ -206,30 +208,117 @@ def get_default_conversation_registry() -> ConversationSessionRegistry:
     return _DEFAULT_REGISTRY
 
 
-def delete_conversation_segment(
+async def set_conversation_segment_enabled(
     *,
     user_id: str,
     conversation_id: str,
     stream_id: str,
     segment_id: str,
+    enabled: bool,
     registry: ConversationSessionRegistry | None = None,
-) -> tuple[TranscriptSegmentModel, SoapApplyOutcome] | None:
-    """録音停止後などに会話レジストリから発話を削除し、SOAP 根拠との整合を再評価する。"""
-    resolved_registry = registry or get_default_conversation_registry()
-    record = resolved_registry.get(user_id=user_id, conversation_id=conversation_id)
+    llm_client: SoapLlmClientProtocol | None = None,
+    on_applied: Callable[[SetConversationSegmentEnabledResponse], None] | None = None,
+) -> tuple[TranscriptSegmentModel, SoapApplyOutcome, ConversationSessionRecord] | None:
+    """停止中の原文有効性を変更し、有効な発話だけでSOAPを再生成する。"""
+    record = (registry or get_default_conversation_registry()).get(
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
     if record is None:
         return None
-    deleted = record.transcript_state.delete_segment(
+    effective_llm = llm_client if llm_client is not None else get_default_soap_llm_client()
+    coordinator = _SoapSessionCoordinator(
+        record=record,
         stream_id=stream_id,
-        segment_id=segment_id,
+        generation=record.active_generation,
+        queue=BoundedWsOutboundQueue(maxsize=64),
+        llm_client=effective_llm,
+        timing=SoapTimingOptions.from_settings(),
     )
-    if deleted is None:
+    updated = coordinator.handle_segment_enabled(
+        {
+            "type": "SetSegmentEnabled",
+            "stream_id": stream_id,
+            "segment_id": segment_id,
+            "enabled": enabled,
+        }
+    )
+    if updated is None:
         return None
-    current_lookup = {
-        (seg.stream_id, seg.segment_id): seg for seg in record.transcript_state.finalized_segments
-    }
-    outcome = record.soap_manager.reconcile_transcript_segments(current_lookup)
-    return deleted, outcome
+    if on_applied is not None:
+        on_applied(
+            SetConversationSegmentEnabledResponse(
+                conversation_id=conversation_id,
+                segment=updated,
+                soap=record.soap_manager.note,
+                soap_status=record.soap_status,
+                has_unapplied_transcript=record.has_unapplied_transcript,
+            )
+        )
+    if record.transcript_state.finalized_segments and coordinator._llm_client is not None:
+        ok = await coordinator._run_extract_step(retries=0)
+        if ok and coordinator.is_current():
+            await coordinator._run_finalize_a_step()
+    return updated, SoapApplyOutcome(record.soap_manager.note, [], [], 0, 0), record
+
+
+async def stream_conversation_segment_enabled(
+    *,
+    user_id: str,
+    conversation_id: str,
+    stream_id: str,
+    segment_id: str,
+    enabled: bool,
+    registry: ConversationSessionRegistry | None = None,
+    llm_client: SoapLlmClientProtocol | None = None,
+) -> AsyncGenerator[SetConversationSegmentEnabledResponse]:
+    """有効性の確定を先に通知し、LLM再生成の結果を同じ応答で後から通知する。"""
+    queue: asyncio.Queue[SetConversationSegmentEnabledResponse | Exception | None] = asyncio.Queue()
+
+    async def run() -> None:
+        try:
+            result = await set_conversation_segment_enabled(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                stream_id=stream_id,
+                segment_id=segment_id,
+                enabled=enabled,
+                registry=registry,
+                llm_client=llm_client,
+                on_applied=queue.put_nowait,
+            )
+            if result is not None:
+                segment, outcome, record = result
+                queue.put_nowait(
+                    SetConversationSegmentEnabledResponse(
+                        conversation_id=conversation_id,
+                        segment=segment,
+                        soap=outcome.soap,
+                        changed_item_ids=outcome.changed_item_ids,
+                        retracted_item_ids=outcome.retracted_item_ids,
+                        soap_status=record.soap_status,
+                        has_unapplied_transcript=record.has_unapplied_transcript,
+                    )
+                )
+        except Exception as exc:
+            queue.put_nowait(exc)
+        finally:
+            queue.put_nowait(None)
+
+    task = asyncio.create_task(run())
+    try:
+        while True:
+            update = await queue.get()
+            if update is None:
+                return
+            if isinstance(update, Exception):
+                raise update
+            yield update
+    finally:
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 def _parse_deepgram_word_timings(alt0: dict[object, object]) -> tuple[DeepgramWordTiming, ...]:
@@ -367,7 +456,7 @@ class _SoapSessionCoordinator:
         self._has_speech_final_trigger = False
         self._last_llm_start: float = 0.0
         self._stopping = False
-        self._llm_lock = asyncio.Lock()
+        self._llm_lock = record.llm_lock
         self._failed_extract_revision: int | None = None
 
     def is_current(self) -> bool:
@@ -480,6 +569,8 @@ class _SoapSessionCoordinator:
             removed=False,
         )
         self._queue.enqueue(event.model_dump_json(), priority="high")
+        if updated.disabled:
+            return
         self._reconcile_soap_with_transcript()
 
         if self._llm_client is not None and updated.speaker_role in {"pharmacist", "patient"}:
@@ -493,32 +584,71 @@ class _SoapSessionCoordinator:
                 self.enqueue_soap_status(status="pending", has_unapplied_transcript=True)
             self._wakeup.set()
 
-    def handle_delete_segment(self, raw_payload: dict[str, object]) -> None:
-        """クライアント UI からの手動削除で確定発話を除外し、SOAP 整合を再評価する。"""
-        if not self.is_current():
-            return
-        try:
-            frame = DeleteSegmentFrame.model_validate(raw_payload)
-        except ValidationError:
-            return
+    def _reset_soap_for_enabled_change(self) -> None:
+        """旧本文を即時に撤回し、残る有効発話の全体再生成を予約する。"""
+        outcome = self._record.soap_manager.reset_for_rebuild()
+        self._queue.enqueue(
+            SoapUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                soap=outcome.soap,
+                changed_item_ids=[],
+                retracted_item_ids=outcome.retracted_item_ids,
+            ).model_dump_json(),
+            priority="high",
+        )
+        self._failed_extract_revision = None
+        active = self._record.transcript_state.finalized_segments
+        self._record.pending_from_transcript_revision = min(
+            (seg.transcript_revision for seg in active), default=None
+        )
+        self._pending_since = time.monotonic() if active else None
+        self._has_speech_final_trigger = bool(active)
+        self.enqueue_soap_status(
+            status=("pending" if active else "ready")
+            if self._llm_client is not None
+            else "disabled",
+            has_unapplied_transcript=bool(active),
+        )
+        self._wakeup.set()
 
-        deleted = self._record.transcript_state.delete_segment(
+    def handle_segment_enabled(
+        self, raw_payload: dict[str, object]
+    ) -> TranscriptSegmentModel | None:
+        """原文を消さずに有効性を変更し、SOAPを再生成する。"""
+        if not self.is_current():
+            return None
+        try:
+            frame = SetSegmentEnabledFrame.model_validate(raw_payload)
+        except ValidationError:
+            return None
+        previous = self._record.transcript_state.get_segment(
+            stream_id=frame.stream_id, segment_id=frame.segment_id
+        )
+        updated = self._record.transcript_state.set_segment_enabled(
             stream_id=frame.stream_id,
             segment_id=frame.segment_id,
+            enabled=frame.enabled,
         )
-        if deleted is None:
-            return
-
-        event = TranscriptUpdatedEvent(
-            protocol_version=self._timing.protocol_version,
-            conversation_id=self._record.conversation_id,
-            event_id=self._event_id(),
-            sequence=self._next_seq(),
-            segment=deleted,
-            removed=True,
+        if updated is None:
+            return None
+        if previous is not None and previous.disabled == updated.disabled:
+            return updated
+        self._queue.enqueue(
+            TranscriptUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                segment=updated,
+                removed=False,
+            ).model_dump_json(),
+            priority="high",
         )
-        self._queue.enqueue(event.model_dump_json(), priority="high")
-        self._reconcile_soap_with_transcript()
+        self._reset_soap_for_enabled_change()
+        return updated
 
     def _parse_and_resolve_gate(self, raw_text: str) -> DeepgramTranscriptInput | None:
         parsed = _parse_deepgram_transcript_input(raw_text)
@@ -771,21 +901,21 @@ class _SoapSessionCoordinator:
             self._queue.enqueue(refined_event.model_dump_json(), priority="high")
 
         for removed_seg in outcome.removed_segments:
-            removed_event = TranscriptUpdatedEvent(
-                protocol_version=self._timing.protocol_version,
-                conversation_id=self._record.conversation_id,
-                event_id=self._event_id(),
-                sequence=self._next_seq(),
-                segment=removed_seg,
-                removed=True,
+            self._queue.enqueue(
+                TranscriptUpdatedEvent(
+                    protocol_version=self._timing.protocol_version,
+                    conversation_id=self._record.conversation_id,
+                    event_id=self._event_id(),
+                    sequence=self._next_seq(),
+                    segment=removed_seg,
+                    removed=True,
+                ).model_dump_json(),
+                priority="high",
             )
-            self._queue.enqueue(removed_event.model_dump_json(), priority="high")
 
-        if (
-            outcome.refined_segments
-            or outcome.removed_segments
-            or (outcome.removed and outcome.suppressed_crosstalk)
-        ):
+        if outcome.removed_segments:
+            self._reset_soap_for_enabled_change()
+        elif outcome.refined_segments:
             self._reconcile_soap_with_transcript()
 
         if (outcome.is_new_final or outcome.refined_segments) and self._llm_client is not None:
@@ -1023,6 +1153,7 @@ class _SoapSessionCoordinator:
                     )
                     return True
 
+                snapshot_soap_revision = self._record.soap_manager.note.revision
                 snapshot_lookup = {(seg.stream_id, seg.segment_id): seg for seg in all_finals}
                 snapshot_sig = {key: seg.segment_revision for key, seg in snapshot_lookup.items()}
                 self._pending_since = None
@@ -1033,7 +1164,7 @@ class _SoapSessionCoordinator:
                     status_updating_emitted = True
 
                 try:
-                    raw = await self._llm_client.extract_spoa(
+                    raw = await self._llm_client.extract_soap(
                         self._record.soap_manager.build_extract_payload(
                             new_segments=new_segments,
                             all_final_segments=list(snapshot_lookup.values()),
@@ -1045,7 +1176,15 @@ class _SoapSessionCoordinator:
                         (seg.stream_id, seg.segment_id): seg
                         for seg in self._record.transcript_state.finalized_segments
                     }
-                    outcome = self._record.soap_manager.apply_extract_spoa_raw(
+                    if self._record.soap_manager.note.revision != snapshot_soap_revision:
+                        if drift_retries >= max_drift_retries:
+                            raise SoapLlmClientError(
+                                "会話の更新中のため再生成を保留しました。",
+                                code="LLM_INVALID_OUTPUT",
+                            )
+                        drift_retries += 1
+                        continue
+                    outcome = self._record.soap_manager.apply_extract_soap_raw(
                         raw_result=raw,
                         segments_lookup=current_lookup,
                         processed_transcript_revision=target_rev,
@@ -1310,8 +1449,8 @@ async def relay_soap_conversation_stream(
                 if msg_type == "UpdateSegmentSpeaker":
                     coordinator.handle_segment_speaker_override(control)
                     continue
-                if msg_type == "DeleteSegment":
-                    coordinator.handle_delete_segment(control)
+                if msg_type == "SetSegmentEnabled":
+                    coordinator.handle_segment_enabled(control)
                     continue
                 if msg_type == "CloseStream":
                     await deepgram_ws.send(payload)

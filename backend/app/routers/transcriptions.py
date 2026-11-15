@@ -2,13 +2,17 @@ from contextlib import suppress
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 
 from app.routers.dependencies import get_current_user
 from app.schemas.auth import AuthenticatedUser
-from app.schemas.speaker import DeleteConversationSegmentResponse
+from app.schemas.speaker import SetConversationSegmentEnabledResponse, SetSegmentEnabledFrame
 from app.schemas.transcription import TranscriptionStreamConfig
 from app.services.auth_service import is_origin_allowed
-from app.services.soap_stream_service import delete_conversation_segment
+from app.services.soap_stream_service import (
+    set_conversation_segment_enabled,
+    stream_conversation_segment_enabled,
+)
 from app.services.transcription_service import relay_deepgram_stream
 
 router = APIRouter(prefix="/api/transcriptions", tags=["transcriptions"])
@@ -75,30 +79,62 @@ async def transcribe_websocket(
     )
 
 
-@router.delete(
+@router.patch(
     "/conversations/{conversation_id}/segments",
-    response_model=DeleteConversationSegmentResponse,
+    response_model=SetConversationSegmentEnabledResponse,
 )
-async def remove_conversation_segment(
+async def update_conversation_segment_enabled(
     conversation_id: str,
+    frame: SetSegmentEnabledFrame,
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-    stream_id: str = Query(min_length=1, max_length=128),
-    segment_id: str = Query(min_length=1, max_length=128),
-) -> DeleteConversationSegmentResponse:
-    """停止中や再開前の会話レコードから重複発話を削除し、SOAP との整合結果を返す。"""
-    result = delete_conversation_segment(
+    stream: bool = False,
+) -> SetConversationSegmentEnabledResponse | StreamingResponse:
+    """原文を保持して無効化・再有効化し、SOAP再生成結果を返す。"""
+    if stream:
+        updates = stream_conversation_segment_enabled(
+            user_id=current_user.user_id,
+            conversation_id=conversation_id,
+            stream_id=frame.stream_id,
+            segment_id=frame.segment_id,
+            enabled=frame.enabled,
+        )
+        try:
+            first = await anext(updates)
+        except StopAsyncIteration as exc:
+            raise HTTPException(status_code=404, detail="対象の確定発話が見つかりません。") from exc
+
+        async def body():
+            try:
+                yield first.model_dump_json() + "\n"
+                async for update in updates:
+                    yield update.model_dump_json() + "\n"
+            finally:
+                await updates.aclose()
+
+        return StreamingResponse(
+            body(),
+            media_type="application/x-ndjson",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    result = await set_conversation_segment_enabled(
         user_id=current_user.user_id,
         conversation_id=conversation_id,
-        stream_id=stream_id,
-        segment_id=segment_id,
+        stream_id=frame.stream_id,
+        segment_id=frame.segment_id,
+        enabled=frame.enabled,
     )
     if result is None:
-        raise HTTPException(status_code=404, detail="対象の発話が見つかりません。")
-    deleted_segment, outcome = result
-    return DeleteConversationSegmentResponse(
+        raise HTTPException(status_code=404, detail="対象の確定発話が見つかりません。")
+    updated, outcome, record = result
+    return SetConversationSegmentEnabledResponse(
         conversation_id=conversation_id,
-        segment=deleted_segment,
+        segment=updated,
         soap=outcome.soap,
         changed_item_ids=outcome.changed_item_ids,
         retracted_item_ids=outcome.retracted_item_ids,
+        soap_status=record.soap_status,
+        has_unapplied_transcript=record.has_unapplied_transcript,
     )
