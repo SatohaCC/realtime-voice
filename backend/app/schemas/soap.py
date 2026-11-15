@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SpeakerRole = Literal["pharmacist", "patient"]
+SpeakerRole = Literal["pharmacist", "patient", "unknown"]
 SoapSectionKey = Literal["S", "O", "A", "P"]
 SoapItemOrigin = Literal["conversation", "plan_inference"]
 SoapVerificationStatus = Literal["reported", "confirmed", "draft_inference"]

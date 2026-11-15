@@ -638,7 +638,7 @@ class SoapStateManager:
             return any(ev.speaker_role == "patient" for ev in evidence)
         if section in {"P", "A"}:
             return any(ev.speaker_role == "pharmacist" for ev in evidence)
-        return len(evidence) > 0
+        return any(ev.speaker_role in {"pharmacist", "patient"} for ev in evidence)
 
     @staticmethod
     def _resolve_verification_status(
