@@ -1,6 +1,13 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { groupTranscriptTurns, TranscriptChat } from "./TranscriptChat";
+
+const SPEAKER_OPTIONS = [
+  { value: "pharmacist" as const, label: "薬剤師" },
+  { value: "patient" as const, label: "患者" },
+  { value: "unknown" as const, label: "話者不明" },
+];
 
 const SAMPLE_SEGMENTS = [
   {
@@ -42,6 +49,14 @@ const SAMPLE_SEGMENTS = [
 ];
 
 describe("TranscriptChat", () => {
+  const getAnimations = Element.prototype.getAnimations;
+  beforeAll(() => {
+    Element.prototype.getAnimations = () => [];
+  });
+  afterAll(() => {
+    Element.prototype.getAnimations = getAnimations;
+  });
+
   it("同話者の連続確定発話をグループ化しつつ個別の根拠 segment key を保持する", () => {
     const groups = groupTranscriptTurns(SAMPLE_SEGMENTS);
     expect(groups).toHaveLength(2);
@@ -98,7 +113,8 @@ describe("TranscriptChat", () => {
     expect(screen.queryByRole("button", { name: "↓ 新しい発話" })).not.toBeInTheDocument();
   });
 
-  it("確定済み発話の話者セレクタ変更でグループ内全セグメントの訂正ハンドラを呼ぶ", () => {
+  it("共有Selectで確定済み発話の話者を変更するとグループ内全セグメントの訂正ハンドラを呼ぶ", async () => {
+    const user = userEvent.setup();
     const onChangeSegmentSpeaker = vi.fn();
     render(
       <TranscriptChat
@@ -106,14 +122,52 @@ describe("TranscriptChat", () => {
         segments={SAMPLE_SEGMENTS}
         emptyMessage="空"
         scrollToBottomLabel="↓ 新しい発話"
+        speakerOptions={SPEAKER_OPTIONS}
+        getSpeakerSelectLabel={({ timeLabel }) => `${timeLabel} の話者を変更`}
         onChangeSegmentSpeaker={onChangeSegmentSpeaker}
       />,
     );
 
-    const selector = screen.getByLabelText("00:04.2 の話者を変更");
-    fireEvent.change(selector, { target: { value: "pharmacist" } });
+    const trigger = screen.getByRole("combobox", { name: "00:04.2 の話者を変更" });
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const controlsId = trigger.getAttribute("aria-controls");
+    expect(controlsId).toBeTruthy();
+    const listbox = document.getElementById(controlsId ?? "");
+    expect(listbox).not.toBeNull();
+    await user.click(
+      within(listbox as HTMLElement).getByRole("option", { name: "薬剤師", hidden: true }),
+    );
     expect(onChangeSegmentSpeaker).toHaveBeenCalledTimes(2);
     expect(onChangeSegmentSpeaker).toHaveBeenNthCalledWith(1, "s1", "seg-2", "pharmacist");
     expect(onChangeSegmentSpeaker).toHaveBeenNthCalledWith(2, "s1", "seg-3", "pharmacist");
+  });
+
+  it("話者不明（unknown）のターンは data-speaker-role='unknown' で描画する", () => {
+    const { container } = render(
+      <TranscriptChat
+        title="文字起こし"
+        segments={[
+          {
+            streamId: "s1",
+            segmentId: "seg-u",
+            channelIndex: 1,
+            align: "left",
+            speakerRole: "unknown",
+            roleName: "話者不明",
+            timeLabel: "00:08.0",
+            text: "はい。",
+            status: "final",
+            statusLabel: "確定",
+          },
+        ]}
+        emptyMessage="空"
+        scrollToBottomLabel="↓ 新しい発話"
+      />,
+    );
+
+    const turn = container.querySelector('li[data-speaker-role="unknown"]');
+    expect(turn).toBeInTheDocument();
+    expect(screen.getByText("話者不明")).toBeInTheDocument();
   });
 });

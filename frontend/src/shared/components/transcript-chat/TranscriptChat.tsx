@@ -3,9 +3,15 @@
 import * as stylex from "@stylexjs/stylex";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/shared/ui/badge/Badge";
+import { Select } from "@/shared/ui/select/Select";
 import { transcriptChatStyles as s } from "./TranscriptChat.styles";
 
 export type TranscriptSpeakerRole = "pharmacist" | "patient" | "unknown";
+
+export interface TranscriptSpeakerOption {
+  value: TranscriptSpeakerRole;
+  label: string;
+}
 
 export interface TranscriptChatSegment {
   streamId: string;
@@ -28,6 +34,8 @@ export interface TranscriptChatProps {
   emptyMessage: string;
   scrollToBottomLabel: string;
   highlightedSegmentKey?: string | null;
+  speakerOptions?: readonly TranscriptSpeakerOption[];
+  getSpeakerSelectLabel?: (turn: { timeLabel: string; roleName: string }) => string;
   onChangeSegmentSpeaker?: (
     streamId: string,
     segmentId: string,
@@ -109,6 +117,8 @@ export function TranscriptChat({
   emptyMessage,
   scrollToBottomLabel,
   highlightedSegmentKey = null,
+  speakerOptions,
+  getSpeakerSelectLabel,
   onChangeSegmentSpeaker,
 }: TranscriptChatProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -193,36 +203,53 @@ export function TranscriptChat({
             <ul aria-label={title} {...stylex.props(s.turnList)}>
               {turns.map((turn) => {
                 const isRight = turn.align === "right";
+                const isUnknown = turn.speakerRole === "unknown";
+                const roleChipStyle = isUnknown
+                  ? s.roleChipUnknown
+                  : isRight
+                    ? s.roleChipRight
+                    : s.roleChipLeft;
+                const bubbleAlignStyle = isUnknown
+                  ? s.bubbleUnknown
+                  : isRight
+                    ? s.bubbleRight
+                    : s.bubbleLeft;
+                const canChangeSpeaker =
+                  Boolean(onChangeSegmentSpeaker) &&
+                  !turn.isInterim &&
+                  Boolean(turn.speakerRole) &&
+                  Boolean(speakerOptions && speakerOptions.length > 0);
                 return (
                   <li
                     key={turn.turnKey}
                     data-align={turn.align}
+                    data-speaker-role={turn.speakerRole}
                     {...stylex.props(s.turnRow, isRight ? s.turnRowRight : s.turnRowLeft)}
                   >
                     <div {...stylex.props(s.turnMeta)}>
-                      {onChangeSegmentSpeaker && !turn.isInterim && turn.speakerRole ? (
-                        <select
-                          aria-label={`${turn.timeLabel} の話者を変更`}
+                      {canChangeSpeaker && turn.speakerRole && speakerOptions ? (
+                        <Select
+                          size="sm"
+                          hideLabel
+                          label={
+                            getSpeakerSelectLabel?.({
+                              timeLabel: turn.timeLabel,
+                              roleName: turn.roleName,
+                            }) ?? `${turn.timeLabel} (${turn.roleName})`
+                          }
+                          options={speakerOptions}
                           value={turn.speakerRole}
-                          onChange={(event) => {
-                            const nextRole = event.target.value as TranscriptSpeakerRole;
+                          onValueChange={(nextValue) => {
+                            if (!nextValue || !onChangeSegmentSpeaker) return;
+                            const nextRole = nextValue as TranscriptSpeakerRole;
                             for (const item of turn.items) {
                               onChangeSegmentSpeaker(item.streamId, item.segmentId, nextRole);
                             }
                           }}
-                          {...stylex.props(
-                            s.roleSelect,
-                            isRight ? s.roleChipRight : s.roleChipLeft,
-                          )}
-                        >
-                          <option value="pharmacist">薬剤師</option>
-                          <option value="patient">患者</option>
-                          <option value="unknown">話者不明</option>
-                        </select>
+                          triggerStyle={[s.roleSelectTrigger, roleChipStyle]}
+                        />
                       ) : (
-                        <span {...stylex.props(isRight ? s.roleChipRight : s.roleChipLeft)}>
-                          {turn.roleName}
-                        </span>
+                        <span {...stylex.props(roleChipStyle)}>{turn.roleName}</span>
                       )}
                       {turn.micLabel ? (
                         <span {...stylex.props(s.micText)}>{turn.micLabel}</span>
@@ -234,7 +261,7 @@ export function TranscriptChat({
                       aria-live={turn.isInterim ? "off" : undefined}
                       {...stylex.props(
                         s.bubble,
-                        isRight ? s.bubbleRight : s.bubbleLeft,
+                        bubbleAlignStyle,
                         turn.isInterim && s.bubbleInterim,
                       )}
                     >

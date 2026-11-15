@@ -11,6 +11,9 @@ export const selectStyles = stylex.create({
   rootCompact: {
     gap: 0,
   },
+  rootInline: {
+    display: "inline-flex",
+  },
   label: {
     fontSize: "0.75rem",
     lineHeight: "1rem",
@@ -73,6 +76,16 @@ export const selectStyles = stylex.create({
       ":active": "none",
     },
   },
+  triggerSm: {
+    width: "auto",
+    minHeight: { default: "1.75rem", "@media (pointer: coarse)": "2.25rem" },
+    paddingBlock: "0.125rem",
+    paddingInline: "0.5rem",
+    gap: "0.3rem",
+    fontSize: "0.75rem",
+    lineHeight: "1.25",
+    fontWeight: 600,
+  },
   value: {
     minWidth: 0,
     overflow: "hidden",
@@ -100,6 +113,9 @@ export const selectStyles = stylex.create({
     borderColor: tokens.outlineVariant,
     boxShadow: tokens.shadow2,
     outline: "none",
+  },
+  contentSm: {
+    minWidth: "8.5rem",
   },
   item: {
     display: "flex",

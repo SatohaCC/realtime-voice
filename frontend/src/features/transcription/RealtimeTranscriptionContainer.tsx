@@ -484,6 +484,12 @@ export function RealtimeTranscriptionContainer() {
           "「文字起こし開始」を押して話しかけると、患者（左）と薬剤師（右）の会話が表示されます。",
         scrollToBottomLabel: "↓ 新しい発話",
         highlightedSegmentKey,
+        speakerOptions: [
+          { value: "pharmacist", label: "薬剤師" },
+          { value: "patient", label: "患者" },
+          { value: "unknown", label: "話者不明" },
+        ],
+        getSpeakerSelectLabel: ({ timeLabel }) => `${timeLabel} の話者を変更`,
         onChangeSegmentSpeaker:
           audio.mode === "dual" && isStreaming ? updateSegmentSpeaker : undefined,
       }}

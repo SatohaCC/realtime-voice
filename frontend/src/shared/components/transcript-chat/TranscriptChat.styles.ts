@@ -125,17 +125,19 @@ export const transcriptChatStyles = stylex.create({
     color: tokens.onTertiaryContainer,
     fontWeight: 600,
   },
-  roleSelect: {
-    appearance: "auto",
-    borderWidth: "1px",
-    borderStyle: "solid",
+  roleChipUnknown: {
+    display: "inline-flex",
+    alignItems: "center",
+    paddingInline: "0.5rem",
+    paddingBlock: "0.15rem",
+    borderRadius: tokens.cornerSmall,
+    backgroundColor: tokens.surfaceContainerHigh,
+    color: tokens.onSurfaceVariant,
+    fontWeight: 600,
+  },
+  roleSelectTrigger: {
     borderColor: tokens.outlineVariant,
     borderRadius: tokens.cornerSmall,
-    paddingInline: "0.45rem",
-    paddingBlock: "0.1rem",
-    fontSize: "0.75rem",
-    fontWeight: 600,
-    cursor: "pointer",
   },
   micText: {
     fontWeight: 500,
@@ -167,6 +169,12 @@ export const transcriptChatStyles = stylex.create({
     color: tokens.onTertiaryContainer,
     borderColor: tokens.tertiary,
     borderTopRightRadius: tokens.cornerExtraSmall,
+  },
+  bubbleUnknown: {
+    backgroundColor: tokens.surfaceContainerLow,
+    color: tokens.onSurface,
+    borderColor: tokens.outline,
+    borderTopLeftRadius: tokens.cornerExtraSmall,
   },
   bubbleInterim: {
     backgroundColor: tokens.surfaceContainer,
