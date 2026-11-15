@@ -14,6 +14,7 @@ import { getValidAccessToken, subscribeAuthState } from "@/shared/lib/supabase/c
 import { AudioLevelHistory } from "@/shared/lib/transcription/audioLevelHistory";
 import {
   createDeepgramStreamSession,
+  type DeepgramSpeakerProfilePayload,
   type DeepgramStreamSession,
 } from "@/shared/lib/transcription/deepgramClient";
 import {
@@ -42,6 +43,10 @@ function createConversationId(): string {
 export interface UseRealtimeTranscriptionOptions {
   /** ログアウト等で認証が無効になった際に呼ばれるコールバック */
   onAuthInvalidated?: () => void;
+  /** 端末ローカル保存済みの事前登録薬剤師声紋（2マイク会話時に送信） */
+  speakerProfile?: DeepgramSpeakerProfilePayload | null;
+  /** サーバー側で声紋モデルの不一致等で拒否された際のコールバック */
+  onSpeakerProfileRejected?: (reason: string | null | undefined) => void;
 }
 
 const SPEAKER_LABELS: Record<0 | 1, string> = { 0: "薬剤師", 1: "患者" };
@@ -49,6 +54,8 @@ const SPEAKER_LABELS: Record<0 | 1, string> = { 0: "薬剤師", 1: "患者" };
 /** 認証トークン取得・WebSocket 接続・収音・SOAP会話同期を管理する Hook。 */
 export function useRealtimeTranscription({
   onAuthInvalidated,
+  speakerProfile = null,
+  onSpeakerProfileRejected,
 }: UseRealtimeTranscriptionOptions = {}) {
   const [transcriptState, setTranscriptState] = useState(createInitialTranscriptState);
   const [conversationState, setConversationState] = useState<ConversationWorkspaceState>(() =>
@@ -60,6 +67,10 @@ export function useRealtimeTranscription({
   const conversationIdRef = useRef<string>("conv-initial");
   const onAuthInvalidatedRef = useRef(onAuthInvalidated);
   onAuthInvalidatedRef.current = onAuthInvalidated;
+  const speakerProfileRef = useRef<DeepgramSpeakerProfilePayload | null>(speakerProfile);
+  speakerProfileRef.current = speakerProfile;
+  const onSpeakerProfileRejectedRef = useRef(onSpeakerProfileRejected);
+  onSpeakerProfileRejectedRef.current = onSpeakerProfileRejected;
 
   useEffect(() => {
     const generated = createConversationId();
@@ -214,7 +225,14 @@ export function useRealtimeTranscription({
         language: "ja",
         enableSoap,
         conversationId: enableSoap ? activeConversationId : undefined,
+        speakerProfile: enableSoap ? speakerProfileRef.current : null,
         signal: run.controller.signal,
+        onSpeakerProfileAck: (ack) => {
+          if (runRef.current !== run || run.invalidated) return;
+          if (!ack.accepted) {
+            onSpeakerProfileRejectedRef.current?.(ack.reason);
+          }
+        },
         onConversationEvent: (event) => {
           if (runRef.current !== run || run.invalidated) return;
           const next = applyConversationWsEvent(run.conversationState, event);

@@ -208,5 +208,38 @@ describe("RealtimeTranscriptionContainer", () => {
     expect(screen.getByText("対象外（1マイク）")).toBeInTheDocument();
     expect(screen.getByText(/1マイクモードは文字起こしのみ行います/)).toBeInTheDocument();
     expect(screen.getByText("テスト発話です。")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "薬剤師声紋（端末ローカル）" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("2マイク時に薬剤師声紋バーと unknown 発話の「話者不明」ラベルを表示する", () => {
+    mocks.hookState.mode = "dual";
+    const conv = createInitialConversationState("conv-unknown");
+    mocks.hookState.conversation = {
+      ...conv,
+      segments: [
+        {
+          stream_id: "s1",
+          segment_id: "seg-unk",
+          segment_revision: 1,
+          transcript_revision: 1,
+          channel_index: 1,
+          speaker_role: "unknown",
+          speaker_label: "話者不明",
+          text: "お待たせしました。",
+          status: "final",
+          start_sec: 0.4,
+          end_sec: 1.5,
+          confidence: 0.9,
+        },
+      ],
+    };
+
+    render(<RealtimeTranscriptionContainer />);
+
+    expect(screen.getByRole("region", { name: "薬剤師声紋（端末ローカル）" })).toBeInTheDocument();
+    expect(screen.getByText("話者不明")).toBeInTheDocument();
+    expect(screen.getByText("お待たせしました。")).toBeInTheDocument();
   });
 });

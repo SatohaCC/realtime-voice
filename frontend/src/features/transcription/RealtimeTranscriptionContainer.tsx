@@ -4,19 +4,25 @@ import * as stylex from "@stylexjs/stylex";
 import { useRouter } from "next/navigation";
 import type { ComponentProps } from "react";
 import { useCallback, useEffect, useState } from "react";
+import { useSpeakerEnrollment } from "@/features/speaker/useSpeakerEnrollment";
 import type { MicChannelView } from "@/shared/components/dual-mic-panel/DualMicPanel";
 import {
   type SoapItemBadge,
   SoapPanel,
   type SoapPanelSectionView,
 } from "@/shared/components/soap-panel/SoapPanel";
+import { SpeakerEnrollmentBar } from "@/shared/components/speaker-enrollment-bar/SpeakerEnrollmentBar";
 import {
   TranscriptChat,
   type TranscriptChatSegment,
 } from "@/shared/components/transcript-chat/TranscriptChat";
 import { WorkspaceControlBar } from "@/shared/components/workspace-control-bar/WorkspaceControlBar";
 import { formatSoapNoteAsText } from "@/shared/lib/conversation/soapClipboard";
-import type { SoapLifecycleStatus, SoapSectionKey } from "@/shared/lib/conversation/types";
+import type {
+  SoapLifecycleStatus,
+  SoapSectionKey,
+  SpeakerRole,
+} from "@/shared/lib/conversation/types";
 import { Badge, type BadgeProps } from "@/shared/ui/badge/Badge";
 import { realtimeTranscriptionContainerStyles as s } from "./RealtimeTranscriptionContainer.styles";
 import { useRealtimeTranscription } from "./useRealtimeTranscription";
@@ -24,6 +30,8 @@ import { useRealtimeTranscription } from "./useRealtimeTranscription";
 export interface TranscriptionWorkspaceViewProps {
   /** 上部コントロールバーへ渡す表示・操作 props */
   controlBar: ComponentProps<typeof WorkspaceControlBar>;
+  /** 事前登録済み薬剤師声紋バー props（2マイク時に表示） */
+  speakerBar?: ComponentProps<typeof SpeakerEnrollmentBar> | null;
   /** 左ペインの文字起こしチャット props */
   transcriptChat: ComponentProps<typeof TranscriptChat>;
   /** 右ペインの SOAP パネル props */
@@ -45,6 +53,7 @@ export interface TranscriptionWorkspaceViewProps {
  */
 export function TranscriptionWorkspaceView({
   controlBar,
+  speakerBar = null,
   transcriptChat,
   soapPanel,
   mobilePane,
@@ -56,6 +65,7 @@ export function TranscriptionWorkspaceView({
   return (
     <div {...stylex.props(s.root)}>
       <WorkspaceControlBar {...controlBar} />
+      {speakerBar ? <SpeakerEnrollmentBar {...speakerBar} /> : null}
 
       <div role="tablist" aria-label="作業画面の切り替え" {...stylex.props(s.mobileTabsWrap)}>
         <button
@@ -170,11 +180,18 @@ const SECTION_DEFINITIONS: readonly {
   },
 ];
 
+function speakerRoleLabel(role: SpeakerRole): string {
+  if (role === "pharmacist") return "薬剤師";
+  if (role === "patient") return "患者";
+  return "話者不明";
+}
+
 /**
  * 2マイク音声取得・チャット風リアルタイム文字起こし・固定4欄 SOAP を左右 50:50 で接続する Container。
  */
 export function RealtimeTranscriptionContainer() {
   const router = useRouter();
+  const speaker = useSpeakerEnrollment();
   const {
     audio,
     segments,
@@ -186,6 +203,10 @@ export function RealtimeTranscriptionContainer() {
     toggleTranscription,
     startNewConversation,
   } = useRealtimeTranscription({
+    speakerProfile: speaker.voiceprint
+      ? { modelId: speaker.voiceprint.modelId, embedding: speaker.voiceprint.embedding }
+      : null,
+    onSpeakerProfileRejected: speaker.reportProfileRejected,
     onAuthInvalidated: () => {
       router.replace("/login?next=/transcription");
     },
@@ -273,7 +294,7 @@ export function RealtimeTranscriptionContainer() {
           segmentId: segment.segment_id,
           channelIndex: segment.channel_index,
           align: segment.speaker_role === "pharmacist" ? "right" : "left",
-          roleName: segment.speaker_role === "pharmacist" ? "薬剤師" : "患者",
+          roleName: speakerRoleLabel(segment.speaker_role),
           timeLabel: formatTimestamp(segment.start_sec),
           text: segment.text,
           status: segment.status,
@@ -320,7 +341,7 @@ export function RealtimeTranscriptionContainer() {
         evidences: item.evidence.map((ev) => ({
           streamId: ev.stream_id,
           segmentId: ev.segment_id,
-          speakerLabel: ev.speaker_role === "pharmacist" ? "薬剤師" : "患者",
+          speakerLabel: speakerRoleLabel(ev.speaker_role),
           quote: ev.quote,
         })),
       };
@@ -360,8 +381,52 @@ export function RealtimeTranscriptionContainer() {
       : null);
   const soapBannerTone: "info" | "error" = effectiveSoapStatus === "error" ? "error" : "info";
 
+  const speakerBar: ComponentProps<typeof SpeakerEnrollmentBar> | null =
+    audio.mode === "dual"
+      ? {
+          title: "薬剤師声紋（端末ローカル）",
+          badgeText: speaker.isEnrolling
+            ? "録音中..."
+            : speaker.error
+              ? "登録エラー"
+              : speaker.voiceprint
+                ? "登録済み"
+                : "未登録",
+          badgeTone: speaker.error
+            ? "danger"
+            : speaker.voiceprint && !speaker.isEnrolling
+              ? "success"
+              : "neutral",
+          descriptionText: speaker.isEnrolling
+            ? "薬剤師マイクに向かって通常音量で 4 秒ほど話してください。"
+            : speaker.voiceprint
+              ? `アカウント紐づけ済み（有音 ${speaker.voiceprint.voicedSec.toFixed(1)} 秒）`
+              : "事前に 4 秒登録すると、2マイクの回り込みと薬剤師識別を補助します。",
+          actionLabel: speaker.voiceprint ? "声紋を再登録" : "4秒で声紋登録",
+          cancelLabel: "録音中止",
+          clearLabel: "削除",
+          isEnrolling: speaker.isEnrolling,
+          canEnroll: !isActive && !isConnecting && !isStopping && Boolean(audio.mic1DeviceId),
+          canClear: !isActive && !isConnecting && !isStopping && Boolean(speaker.voiceprint),
+          progressRatio: speaker.progressRatio,
+          progressLabel: `${Math.round(speaker.progressRatio * 100)}%`,
+          warningMessages: speaker.warnings,
+          errorMessage: speaker.error,
+          onEnroll: () => {
+            if (audio.mic1DeviceId) {
+              void speaker.enroll(audio.mic1DeviceId);
+            }
+          },
+          onCancel: speaker.cancel,
+          onClear: () => {
+            void speaker.clear();
+          },
+        }
+      : null;
+
   return (
     <TranscriptionWorkspaceView
+      speakerBar={speakerBar}
       controlBar={{
         modeGroupLabel: "収音モード",
         statusBadgeText: controlStatusBadge.text,

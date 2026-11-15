@@ -1,4 +1,4 @@
-export type SpeakerRole = "pharmacist" | "patient";
+export type SpeakerRole = "pharmacist" | "patient" | "unknown";
 export type SoapSectionKey = "S" | "O" | "A" | "P";
 export type SoapItemOrigin = "conversation" | "plan_inference";
 export type SoapVerificationStatus = "reported" | "confirmed" | "draft_inference";

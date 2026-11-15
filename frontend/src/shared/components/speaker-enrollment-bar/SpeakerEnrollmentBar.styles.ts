@@ -1,0 +1,93 @@
+import * as stylex from "@stylexjs/stylex";
+import { tokens } from "../../styles/tokens.stylex";
+
+export const speakerEnrollmentBarStyles = stylex.create({
+  root: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.45rem",
+    padding: "0.625rem 1rem",
+    backgroundColor: tokens.surfaceContainerLow,
+    borderRadius: tokens.cornerMedium,
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: tokens.outlineVariant,
+    minWidth: 0,
+    flexShrink: 0,
+  },
+  mainRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "0.625rem",
+    minWidth: 0,
+  },
+  infoGroup: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: "0.5rem",
+    minWidth: 0,
+    flex: "1 1 16rem",
+  },
+  title: {
+    margin: 0,
+    fontSize: "0.875rem",
+    fontWeight: 600,
+    color: tokens.onSurface,
+  },
+  description: {
+    fontSize: "0.8125rem",
+    color: tokens.onSurfaceVariant,
+  },
+  actionsGroup: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: "0.5rem",
+    flexShrink: 0,
+  },
+  progressWrap: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.5rem",
+  },
+  progressTrack: {
+    flex: "1 1 0%",
+    height: "0.35rem",
+    borderRadius: tokens.cornerFull,
+    backgroundColor: tokens.surfaceContainerHigh,
+    overflow: "clip",
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: tokens.primary,
+    transitionProperty: "width",
+    transitionDuration: tokens.motionDuration,
+    transitionTimingFunction: tokens.motionEasing,
+  },
+  progressText: {
+    fontSize: "0.75rem",
+    color: tokens.onSurfaceVariant,
+    whiteSpace: "nowrap",
+  },
+  warningBox: {
+    fontSize: "0.8125rem",
+    lineHeight: 1.4,
+    color: tokens.onSecondaryContainer,
+    backgroundColor: tokens.secondaryContainer,
+    borderRadius: tokens.cornerSmall,
+    paddingInline: "0.625rem",
+    paddingBlock: "0.375rem",
+  },
+  errorBox: {
+    fontSize: "0.8125rem",
+    lineHeight: 1.4,
+    color: tokens.onErrorContainer,
+    backgroundColor: tokens.errorContainer,
+    borderRadius: tokens.cornerSmall,
+    paddingInline: "0.625rem",
+    paddingBlock: "0.375rem",
+  },
+});

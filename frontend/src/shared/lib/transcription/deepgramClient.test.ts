@@ -150,4 +150,23 @@ describe("transcriptReducer", () => {
     expect(state.segments).toHaveLength(1);
     expect(state.segments[0].channelIndex).toBe(0);
   });
+
+  it("parseSpeakerProfileAck でサーバーからの声紋受理応答を解釈する", async () => {
+    const { parseSpeakerProfileAck } = await import("./deepgramClient");
+    expect(
+      parseSpeakerProfileAck(
+        JSON.stringify({
+          type: "SpeakerProfileAck",
+          accepted: true,
+          model_id: "campp-v1",
+          reason: null,
+        }),
+      ),
+    ).toEqual({
+      accepted: true,
+      modelId: "campp-v1",
+      reason: null,
+    });
+    expect(parseSpeakerProfileAck('{"type":"Results"}')).toBeNull();
+  });
 });

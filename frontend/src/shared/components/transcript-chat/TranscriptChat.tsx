@@ -57,7 +57,8 @@ export function groupTranscriptTurns(
       !isInterim &&
       !last.isInterim &&
       last.channelIndex === segment.channelIndex &&
-      last.align === align
+      last.align === align &&
+      last.roleName === segment.roleName
     ) {
       groups[groups.length - 1] = {
         ...last,
