@@ -1,6 +1,7 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
+import { useRouter } from "next/navigation";
 import { DualMicPanel, type MicChannelView } from "@/shared/components/dual-mic-panel/DualMicPanel";
 import {
   TranscriptFeed,
@@ -37,6 +38,7 @@ const STATUS_LABELS: Record<TranscriptFeedItem["status"], string> = {
  * 2マイク音声取得と Deepgram リアルタイム文字起こしフィードを接続する Container。
  */
 export function RealtimeTranscriptionContainer() {
+  const router = useRouter();
   const {
     audio,
     segments,
@@ -46,7 +48,11 @@ export function RealtimeTranscriptionContainer() {
     error,
     toggleTranscription,
     clearTranscripts,
-  } = useRealtimeTranscription();
+  } = useRealtimeTranscription({
+    onAuthInvalidated: () => {
+      router.replace("/login?next=/transcription");
+    },
+  });
 
   const channels: MicChannelView[] = [
     {

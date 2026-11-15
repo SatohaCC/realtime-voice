@@ -14,4 +14,5 @@ class TranscriptionErrorEvent(BaseModel):
     """WebSocket 経由でクライアントへ通知するエラーイベント。"""
 
     type: str = "Error"
+    code: str = "TRANSCRIPTION_ERROR"
     message: str

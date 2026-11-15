@@ -1,6 +1,6 @@
 import * as stylex from "@stylexjs/stylex";
+import Link from "next/link";
 import { HealthStatusContainer } from "@/features/health/HealthStatusContainer";
-import { RealtimeTranscriptionContainer } from "@/features/transcription/RealtimeTranscriptionContainer";
 import { pageStyles as s } from "./page.styles";
 
 export default function HomePage() {
@@ -43,9 +43,11 @@ export default function HomePage() {
         </div>
         <div {...stylex.props(s.panel)}>
           <p {...stylex.props(s.panelDescription)}>
-            1本または2本のマイクを選択して、話者別のリアルタイム文字起こしを確認できます。
+            1本または2本のマイク音声を話者分離し、リアルタイム文字起こしを行う専用ワークスペースです（利用にはログインが必要です）。
           </p>
-          <RealtimeTranscriptionContainer />
+          <Link href="/transcription" {...stylex.props(s.ctaLink)}>
+            文字起こし画面へ <span aria-hidden="true">↗</span>
+          </Link>
         </div>
       </section>
       <section id="connection" aria-labelledby="connection-title" {...stylex.props(s.section)}>

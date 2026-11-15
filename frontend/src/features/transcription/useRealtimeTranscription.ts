@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDualMicAudio } from "@/features/audio/useDualMicAudio";
 import type { AudioCaptureFrame } from "@/shared/lib/audio/dualMicCapture";
+import { getValidAccessToken, subscribeAuthState } from "@/shared/lib/supabase/client";
 import { AudioLevelHistory } from "@/shared/lib/transcription/audioLevelHistory";
 import {
   createDeepgramStreamSession,
@@ -19,19 +20,31 @@ interface TranscriptionRun {
   controller: AbortController;
   history: AudioLevelHistory;
   phase: Phase;
+  invalidated: boolean;
   session?: DeepgramStreamSession;
 }
+
+export interface UseRealtimeTranscriptionOptions {
+  /** ログアウト等で認証が無効になった際に呼ばれるコールバック */
+  onAuthInvalidated?: () => void;
+}
+
 const SPEAKER_LABELS: Record<0 | 1, string> = { 0: "話者 A（マイク 1）", 1: "話者 B（マイク 2）" };
 
-/** 接続・収音・終了待機を、開始ごとに独立したライフサイクルとして管理する。 */
-export function useRealtimeTranscription() {
+/** 認証トークン取得・WebSocket 接続・収音・終了待機を独立したライフサイクルとして管理する。 */
+export function useRealtimeTranscription({
+  onAuthInvalidated,
+}: UseRealtimeTranscriptionOptions = {}) {
   const [transcriptState, setTranscriptState] = useState(createInitialTranscriptState);
   const [phase, setPhase] = useState<Phase | "idle">("idle");
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const runRef = useRef<TranscriptionRun | null>(null);
+  const onAuthInvalidatedRef = useRef(onAuthInvalidated);
+  onAuthInvalidatedRef.current = onAuthInvalidated;
+
   const handleAudioFrame = useCallback((frame: AudioCaptureFrame) => {
     const run = runRef.current;
-    if (!run) return;
+    if (!run || run.invalidated) return;
     run.history.append(frame);
     run.session?.sendAudio(frame.pcm16);
   }, []);
@@ -57,6 +70,43 @@ export function useRealtimeTranscription() {
     }
   }, [audio.stopCapture]);
 
+  useEffect(() => {
+    let activeUserId: string | null = null;
+    const resetAndStop = () => {
+      const run = runRef.current;
+      if (run) {
+        // 認証変更後は終了待機中でも旧接続の音声送信と受信結果を破棄する。
+        run.invalidated = true;
+        run.controller.abort();
+        void stopTranscription();
+      }
+      setTranscriptState(createInitialTranscriptState());
+      setTranscriptionError(null);
+    };
+
+    const unsubscribe = subscribeAuthState({
+      onSignedOut: () => {
+        activeUserId = null;
+        resetAndStop();
+        onAuthInvalidatedRef.current?.();
+      },
+      onUserChanged: (user) => {
+        const nextUserId = user?.userId ?? null;
+        if (activeUserId !== null && nextUserId !== activeUserId) {
+          resetAndStop();
+          if (nextUserId === null) {
+            onAuthInvalidatedRef.current?.();
+          }
+        }
+        activeUserId = nextUserId;
+      },
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [stopTranscription]);
+
   useEffect(
     () => () => {
       const run = runRef.current;
@@ -72,6 +122,7 @@ export function useRealtimeTranscription() {
       controller: new AbortController(),
       history: new AudioLevelHistory(),
       phase: "connecting",
+      invalidated: false,
     };
     runRef.current = run;
     setTranscriptionError(null);
@@ -81,12 +132,24 @@ export function useRealtimeTranscription() {
     const labels =
       audio.mode === "single" ? { 0: "話者（モノラル）", 1: SPEAKER_LABELS[1] } : SPEAKER_LABELS;
     try {
+      const accessToken = await getValidAccessToken();
+      if (runRef.current !== run || run.controller.signal.aborted) {
+        return;
+      }
+      if (!accessToken) {
+        runRef.current = null;
+        setPhase("idle");
+        setTranscriptionError("文字起こしを開始するにはログインが必要です。");
+        return;
+      }
+
       const session = await createDeepgramStreamSession({
+        accessToken,
         channels: audio.mode === "dual" ? 2 : 1,
         language: "ja",
         signal: run.controller.signal,
         onTranscript: (event) => {
-          if (runRef.current !== run) return;
+          if (runRef.current !== run || run.invalidated) return;
           setTranscriptState((current) =>
             applyDeepgramTranscriptEvent(
               current,
@@ -97,12 +160,12 @@ export function useRealtimeTranscription() {
           );
         },
         onError: (error) => {
-          if (runRef.current !== run) return;
+          if (runRef.current !== run || run.invalidated) return;
           streamErrorMessage = error.message;
           setTranscriptionError(error.message);
         },
         onClose: ({ code, reason }) => {
-          if (runRef.current !== run || run.phase === "stopping") return;
+          if (runRef.current !== run || run.invalidated || run.phase === "stopping") return;
           runRef.current = null;
           run.controller.abort();
           void audio.stopCapture();
@@ -129,7 +192,7 @@ export function useRealtimeTranscription() {
       run.phase = "streaming";
       setPhase("streaming");
     } catch (error) {
-      if (runRef.current !== run) return;
+      if (runRef.current !== run || run.invalidated) return;
       runRef.current = null;
       run.controller.abort();
       void audio.stopCapture();

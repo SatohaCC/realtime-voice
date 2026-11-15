@@ -1,10 +1,13 @@
 export interface DeepgramStreamOptions {
+  accessToken: string;
   channels: 1 | 2;
   language?: string;
   sampleRate?: number;
   endpointingMs?: number;
   baseUrl?: string;
+  connectTimeoutMs?: number;
   signal?: AbortSignal;
+  onAuthOk?: (info: { expiresAt: number; sessionExpiresAt: number }) => void;
   onTranscript: (event: DeepgramTranscriptEvent) => void;
   onError?: (error: Error) => void;
   onClose?: (event: { code: number; reason: string }) => void;
@@ -27,8 +30,11 @@ export interface DeepgramStreamSession {
 
 interface DeepgramRawResponse {
   type?: string;
+  code?: string;
   message?: string;
   description?: string;
+  expires_at?: number;
+  session_expires_at?: number;
   channel_index?: number[];
   start?: number;
   duration?: number;
@@ -92,6 +98,33 @@ export function buildDeepgramWebSocketUrl({
 }
 
 /**
+ * FastAPI から届いた AuthOk イベントの有効期限情報を抽出する。
+ */
+export function parseDeepgramAuthOk(
+  rawData: string,
+): { expiresAt: number; sessionExpiresAt: number } | null {
+  let parsed: DeepgramRawResponse;
+  try {
+    parsed = JSON.parse(rawData) as DeepgramRawResponse;
+  } catch {
+    return null;
+  }
+
+  if (
+    parsed.type !== "AuthOk" ||
+    typeof parsed.expires_at !== "number" ||
+    typeof parsed.session_expires_at !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    expiresAt: parsed.expires_at,
+    sessionExpiresAt: parsed.session_expires_at,
+  };
+}
+
+/**
  * FastAPI / Deepgram から届いた Error イベントのメッセージを抽出する。
  */
 export function parseDeepgramErrorMessage(rawData: string): string | null {
@@ -148,25 +181,34 @@ export function parseDeepgramMessage(rawData: string): DeepgramTranscriptEvent |
 }
 
 /**
- * Deepgram のリアルタイム WebSocket セッションを開き、PCM 送信と受信イベント処理を行う。
+ * Deepgram 中継 WebSocket セッションを開き、Auth ハンドシェイク後に PCM 送信と受信処理を行う。
  */
 export function createDeepgramStreamSession({
+  accessToken,
   channels,
   language = "ja",
   sampleRate = 16000,
   endpointingMs = 300,
   baseUrl,
+  connectTimeoutMs = 15000,
+  onAuthOk,
   onTranscript,
   onError,
   onClose,
   signal,
 }: DeepgramStreamOptions): Promise<DeepgramStreamSession> {
-  const url = buildDeepgramWebSocketUrl({ channels, language, sampleRate, endpointingMs, baseUrl });
-  if (signal?.aborted)
+  if (!accessToken.trim()) {
+    return Promise.reject(new Error("文字起こしを開始するにはログインが必要です。"));
+  }
+  if (signal?.aborted) {
     return Promise.reject(new DOMException("接続をキャンセルしました。", "AbortError"));
+  }
+
+  const url = buildDeepgramWebSocketUrl({ channels, language, sampleRate, endpointingMs, baseUrl });
   const socket = new WebSocket(url);
   socket.binaryType = "arraybuffer";
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+  let connectTimer: ReturnType<typeof setTimeout> | undefined;
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
   let closing = false;
   let closed = false;
@@ -180,6 +222,7 @@ export function createDeepgramStreamSession({
     let settled = false;
     const cleanup = () => {
       clearInterval(keepAliveTimer);
+      clearTimeout(connectTimer);
       clearTimeout(closeTimer);
       signal?.removeEventListener("abort", abort);
     };
@@ -199,35 +242,69 @@ export function createDeepgramStreamSession({
       forceClose();
     };
     signal?.addEventListener("abort", abort, { once: true });
-    socket.onopen = () => {
+
+    connectTimer = setTimeout(() => {
+      if (settled) return;
       settled = true;
-      keepAliveTimer = setInterval(() => {
-        if (!closing && socket.readyState === WebSocket.OPEN)
-          socket.send(JSON.stringify({ type: "KeepAlive" }));
-      }, 8000);
-      resolve({
-        sendAudio: (pcm16) => {
-          if (!closing && socket.readyState === WebSocket.OPEN) socket.send(pcm16);
-        },
-        close: () => {
-          if (closing || closed) return closePromise;
-          closing = true;
-          closedManually = true;
-          clearInterval(keepAliveTimer);
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: "CloseStream" }));
-            // 中継側の最終結果待機（5秒）より長く待ち、応答しない接続も確実に解放する。
-            closeTimer = setTimeout(() => {
-              onError?.(new Error("文字起こしの最終結果の待機がタイムアウトしました。"));
-              forceClose();
-            }, 6000);
-          } else forceClose();
-          return closePromise;
-        },
-      });
+      closedManually = true;
+      reject(new Error("文字起こしサーバーへの接続・認証がタイムアウトしました。"));
+      forceClose();
+    }, connectTimeoutMs);
+
+    const buildSession = (): DeepgramStreamSession => ({
+      sendAudio: (pcm16) => {
+        if (!settled || closing || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(pcm16);
+      },
+      close: () => {
+        if (closing || closed) return closePromise;
+        closing = true;
+        closedManually = true;
+        clearInterval(keepAliveTimer);
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "CloseStream" }));
+          // 中継側の最終結果待機（5秒）より長く待ち、応答しない接続も確実に解放する。
+          closeTimer = setTimeout(() => {
+            onError?.(new Error("文字起こしの最終結果の待機がタイムアウトしました。"));
+            forceClose();
+          }, 6000);
+        } else forceClose();
+        return closePromise;
+      },
+    });
+
+    socket.onopen = () => {
+      // 接続直後に Auth フレームを送信し、AuthOk を受け取るまで接続完了とみなさない
+      socket.send(JSON.stringify({ type: "Auth", access_token: accessToken }));
     };
+
     socket.onmessage = (event) => {
       if (typeof event.data !== "string") return;
+
+      if (!settled) {
+        const authOk = parseDeepgramAuthOk(event.data);
+        if (authOk) {
+          settled = true;
+          clearTimeout(connectTimer);
+          keepAliveTimer = setInterval(() => {
+            if (!closing && socket.readyState === WebSocket.OPEN)
+              socket.send(JSON.stringify({ type: "KeepAlive" }));
+          }, 8000);
+          onAuthOk?.(authOk);
+          resolve(buildSession());
+          return;
+        }
+
+        const errorMessage = parseDeepgramErrorMessage(event.data);
+        if (errorMessage) {
+          settled = true;
+          closedManually = true;
+          reject(new Error(errorMessage));
+          forceClose();
+        }
+        return;
+      }
+
       const errorMessage = parseDeepgramErrorMessage(event.data);
       if (errorMessage) {
         onError?.(new Error(errorMessage));
@@ -236,6 +313,7 @@ export function createDeepgramStreamSession({
       const parsed = parseDeepgramMessage(event.data);
       if (parsed) onTranscript(parsed);
     };
+
     socket.onerror = () => {
       const error = new Error("Deepgram WebSocket 接続でエラーが発生しました。");
       if (!settled) {
@@ -245,6 +323,7 @@ export function createDeepgramStreamSession({
         forceClose();
       } else onError?.(error);
     };
+
     socket.onclose = (event) => {
       closed = true;
       cleanup();
