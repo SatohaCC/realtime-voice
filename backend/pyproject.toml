@@ -16,8 +16,10 @@ dev = [
     "httpx>=0.28.0",
     "import-linter>=2.1",
     "mypy>=1.14.0",
+    "numpy>=2.0.0",
     "pytest>=8.3.0",
     "ruff>=0.8.0",
+    "sherpa-onnx>=2.0.0",
 ]
 
 [tool.ruff]
