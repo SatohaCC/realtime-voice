@@ -584,7 +584,7 @@ class _SoapSessionCoordinator:
                 self.enqueue_soap_status(status="pending", has_unapplied_transcript=True)
             self._wakeup.set()
 
-    def _reset_soap_for_enabled_change(self) -> None:
+    def _reset_soap_for_transcript_change(self) -> None:
         """旧本文を即時に撤回し、残る有効発話の全体再生成を予約する。"""
         outcome = self._record.soap_manager.reset_for_rebuild()
         self._queue.enqueue(
@@ -647,7 +647,7 @@ class _SoapSessionCoordinator:
             ).model_dump_json(),
             priority="high",
         )
-        self._reset_soap_for_enabled_change()
+        self._reset_soap_for_transcript_change()
         return updated
 
     def _parse_and_resolve_gate(self, raw_text: str) -> DeepgramTranscriptInput | None:
@@ -853,6 +853,10 @@ class _SoapSessionCoordinator:
             )
             self._queue.enqueue(updated_event.model_dump_json(), priority="high")
 
+        if outcome.retracted_item_ids:
+            # 訂正発話だけの差分抽出では、統合本文から撤回した他の発話を復元できない。
+            self._reset_soap_for_transcript_change()
+
     def handle_deepgram_message(
         self,
         raw_text: str,
@@ -914,7 +918,7 @@ class _SoapSessionCoordinator:
             )
 
         if outcome.removed_segments:
-            self._reset_soap_for_enabled_change()
+            self._reset_soap_for_transcript_change()
         elif outcome.refined_segments:
             self._reconcile_soap_with_transcript()
 

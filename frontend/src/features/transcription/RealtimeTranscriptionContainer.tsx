@@ -173,7 +173,7 @@ const SECTION_DEFINITIONS: readonly {
   },
 ];
 
-function speakerRoleLabel(role: SpeakerRole): string {
+function speakerIdLabel(role: SpeakerRole): string {
   if (role === "pharmacist") return "薬剤師";
   if (role === "patient") return "患者";
   return "話者不明";
@@ -290,8 +290,8 @@ export function RealtimeTranscriptionContainer() {
           segmentId: segment.segment_id,
           channelIndex: segment.channel_index,
           align: segment.speaker_role === "pharmacist" ? "right" : "left",
-          speakerRole: segment.speaker_role === "unknown" ? "patient" : segment.speaker_role,
-          roleName: speakerRoleLabel(
+          speakerId: segment.speaker_role === "unknown" ? "patient" : segment.speaker_role,
+          roleName: speakerIdLabel(
             segment.speaker_role === "unknown" ? "patient" : segment.speaker_role,
           ),
           timeLabel: formatTimestamp(segment.start_sec),
@@ -342,7 +342,7 @@ export function RealtimeTranscriptionContainer() {
         evidences: item.evidence.map((ev) => ({
           streamId: ev.stream_id,
           segmentId: ev.segment_id,
-          speakerLabel: speakerRoleLabel(ev.speaker_role),
+          speakerLabel: speakerIdLabel(ev.speaker_role),
           quote: ev.quote,
         })),
       };
@@ -439,7 +439,13 @@ export function RealtimeTranscriptionContainer() {
         ],
         getSpeakerSelectLabel: ({ timeLabel }) => `${timeLabel} の話者を変更`,
         onChangeSegmentSpeaker:
-          audio.mode === "dual" && isStreaming ? updateSegmentSpeaker : undefined,
+          audio.mode === "dual" && isStreaming
+            ? (streamId, segmentId, speakerId) => {
+                if (speakerId === "pharmacist" || speakerId === "patient") {
+                  updateSegmentSpeaker(streamId, segmentId, speakerId);
+                }
+              }
+            : undefined,
         getSegmentToggleLabel: ({ timeLabel, text, disabled }) =>
           `${timeLabel} の発話「${text}」を${disabled ? "有効に戻す" : "無効化"}`,
         segmentActionsDisabled: isSegmentUpdatePending,

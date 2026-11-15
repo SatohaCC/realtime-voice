@@ -34,6 +34,24 @@ for (const path of ["/", "/mechanism"]) {
   });
 }
 
+test("仕組みページの長い英数字はフォントや画面幅が変わってもページを押し広げない", async ({
+  page,
+}) => {
+  await page.goto("/mechanism");
+  // OSごとの日本語フォールバックに依存せず、長い技術識別子の最小幅を検証する。
+  await page.addStyleTag({ content: "main { font-family: monospace; }" });
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    for (const width of [320, 360, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      await expect(page.getByRole("table")).toBeVisible();
+    }
+  }
+});
+
 test("バックエンドのヘルスAPIは正常応答を返す", async ({ request }) => {
   const response = await request.get("/api/health");
   expect(response.ok()).toBeTruthy();

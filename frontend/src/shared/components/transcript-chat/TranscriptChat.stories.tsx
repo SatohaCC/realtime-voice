@@ -3,19 +3,19 @@ import { useState } from "react";
 import {
   TranscriptChat,
   type TranscriptChatSegment,
+  type TranscriptSpeakerId,
   type TranscriptSpeakerOption,
-  type TranscriptSpeakerRole,
 } from "./TranscriptChat";
 
 const SPEAKER_OPTIONS: readonly TranscriptSpeakerOption[] = [
-  { value: "pharmacist", label: "薬剤師" },
-  { value: "patient", label: "患者" },
+  { value: "host", label: "進行役" },
+  { value: "guest", label: "参加者" },
 ];
 
-const SPEAKER_LABELS: Record<TranscriptSpeakerRole, string> = {
-  pharmacist: "薬剤師",
-  patient: "患者",
-  unknown: "話者不明",
+const SPEAKER_LABELS: Record<TranscriptSpeakerId, string> = {
+  host: "進行役",
+  guest: "参加者",
+  unassigned: "未割当",
 };
 
 const INITIAL_SEGMENTS: readonly TranscriptChatSegment[] = [
@@ -24,8 +24,8 @@ const INITIAL_SEGMENTS: readonly TranscriptChatSegment[] = [
     segmentId: "seg-1",
     channelIndex: 0,
     align: "right",
-    speakerRole: "pharmacist",
-    roleName: "薬剤師",
+    speakerId: "host",
+    roleName: "進行役",
     micLabel: "マイク1",
     timeLabel: "00:01.2",
     text: "こんにちは。本日はどのようなお薬でお困りですか？",
@@ -37,8 +37,8 @@ const INITIAL_SEGMENTS: readonly TranscriptChatSegment[] = [
     segmentId: "seg-2",
     channelIndex: 1,
     align: "left",
-    speakerRole: "patient",
-    roleName: "患者",
+    speakerId: "guest",
+    roleName: "参加者",
     micLabel: "マイク2",
     timeLabel: "00:05.4",
     text: "昨日から喉が痛くて、今朝の体温が37.8℃ありました。",
@@ -50,8 +50,8 @@ const INITIAL_SEGMENTS: readonly TranscriptChatSegment[] = [
     segmentId: "seg-3",
     channelIndex: 1,
     align: "left",
-    speakerRole: "patient",
-    roleName: "患者",
+    speakerId: "guest",
+    roleName: "参加者",
     micLabel: "マイク2",
     timeLabel: "00:09.1",
     text: "あと少し咳も出ています。",
@@ -63,8 +63,8 @@ const INITIAL_SEGMENTS: readonly TranscriptChatSegment[] = [
     segmentId: "seg-4",
     channelIndex: 0,
     align: "right",
-    speakerRole: "pharmacist",
-    roleName: "薬剤師",
+    speakerId: "host",
+    roleName: "進行役",
     micLabel: "マイク1",
     timeLabel: "00:13.0",
     text: "毎食後に1錠ずつお水で服用して…",
@@ -80,7 +80,7 @@ const meta = {
   args: {
     title: "文字起こし",
     countLabel: "4 発話",
-    emptyMessage: "「文字起こし開始」を押すと、薬剤師・患者の会話がここに表示されます。",
+    emptyMessage: "「文字起こし開始」を押すと、進行役・参加者の会話がここに表示されます。",
     scrollToBottomLabel: "↓ 新しい発話",
     speakerOptions: SPEAKER_OPTIONS,
     getSpeakerSelectLabel: ({ timeLabel }) => `${timeLabel} の話者を変更`,
@@ -104,8 +104,8 @@ export const WithSpeakerSelector: Story = {
         segmentId: "seg-dup",
         channelIndex: 1,
         align: "right",
-        speakerRole: "pharmacist",
-        roleName: "薬剤師",
+        speakerId: "host",
+        roleName: "進行役",
         micLabel: "マイク2",
         timeLabel: "00:01.2",
         text: "こんにちは。本日はどのようなお薬でお困りですか？",
@@ -119,8 +119,8 @@ export const WithSpeakerSelector: Story = {
         segmentId: "seg-u1",
         channelIndex: 1,
         align: "left",
-        speakerRole: "patient",
-        roleName: "患者",
+        speakerId: "guest",
+        roleName: "参加者",
         timeLabel: "00:11.8",
         text: "飲み合わせも気になっています。",
         status: "final",
@@ -134,15 +134,15 @@ export const WithSpeakerSelector: Story = {
         {...args}
         countLabel={`${segments.length} 発話`}
         segments={segments}
-        onChangeSegmentSpeaker={(streamId, segmentId, speakerRole) => {
+        onChangeSegmentSpeaker={(streamId, segmentId, speakerId) => {
           setSegments((prev) =>
             prev.map((seg) =>
               seg.streamId === streamId && seg.segmentId === segmentId
                 ? {
                     ...seg,
-                    speakerRole,
-                    roleName: SPEAKER_LABELS[speakerRole],
-                    align: speakerRole === "pharmacist" ? "right" : "left",
+                    speakerId,
+                    roleName: SPEAKER_LABELS[speakerId],
+                    align: speakerId === "host" ? "right" : "left",
                   }
                 : seg,
             ),
@@ -169,11 +169,11 @@ export const PatientFallbackAndRefined: Story = {
       INITIAL_SEGMENTS[0],
       {
         streamId: "stream-1",
-        segmentId: "seg-unknown",
+        segmentId: "seg-unassigned",
         channelIndex: 1,
         align: "left",
-        speakerRole: "patient",
-        roleName: "患者",
+        speakerId: "guest",
+        roleName: "参加者",
         timeLabel: "00:04.0",
         text: "はい。",
         status: "final",

@@ -4,9 +4,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { groupTranscriptTurns, TranscriptChat } from "./TranscriptChat";
 
 const SPEAKER_OPTIONS = [
-  { value: "pharmacist" as const, label: "薬剤師" },
-  { value: "patient" as const, label: "患者" },
-  { value: "unknown" as const, label: "話者不明" },
+  { value: "host" as const, label: "進行役" },
+  { value: "guest" as const, label: "参加者" },
+  { value: "unassigned" as const, label: "未割当" },
 ];
 
 const SAMPLE_SEGMENTS = [
@@ -14,8 +14,8 @@ const SAMPLE_SEGMENTS = [
     streamId: "s1",
     segmentId: "seg-1",
     channelIndex: 0 as const,
-    speakerRole: "pharmacist" as const,
-    roleName: "薬剤師",
+    speakerId: "host" as const,
+    roleName: "進行役",
     micLabel: "マイク1",
     timeLabel: "00:01.0",
     text: "ご体調はいかがですか？",
@@ -26,8 +26,8 @@ const SAMPLE_SEGMENTS = [
     streamId: "s1",
     segmentId: "seg-2",
     channelIndex: 1 as const,
-    speakerRole: "patient" as const,
-    roleName: "患者",
+    speakerId: "guest" as const,
+    roleName: "参加者",
     micLabel: "マイク2",
     timeLabel: "00:04.2",
     text: "昨日から咳が出ます。",
@@ -38,8 +38,8 @@ const SAMPLE_SEGMENTS = [
     streamId: "s1",
     segmentId: "seg-3",
     channelIndex: 1 as const,
-    speakerRole: "patient" as const,
-    roleName: "患者",
+    speakerId: "guest" as const,
+    roleName: "参加者",
     micLabel: "マイク2",
     timeLabel: "00:06.8",
     text: "熱は37.8℃です。",
@@ -49,6 +49,15 @@ const SAMPLE_SEGMENTS = [
 ];
 
 describe("TranscriptChat", () => {
+  it("識別子が同じでも話者の確度が異なる発話は別ターンにする", () => {
+    const groups = groupTranscriptTurns([
+      { ...SAMPLE_SEGMENTS[1], speakerId: "unknown", isSpeakerUncertain: false },
+      { ...SAMPLE_SEGMENTS[2], speakerId: "unknown", isSpeakerUncertain: true },
+    ]);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].isSpeakerUncertain).toBe(false);
+    expect(groups[1].isSpeakerUncertain).toBe(true);
+  });
   it("無効な原文は取り消し線で残し、有効化操作で同じIDを返す", async () => {
     const onSetSegmentEnabled = vi.fn();
     render(
@@ -155,14 +164,14 @@ describe("TranscriptChat", () => {
     const listbox = document.getElementById(controlsId ?? "");
     expect(listbox).not.toBeNull();
     await user.click(
-      within(listbox as HTMLElement).getByRole("option", { name: "薬剤師", hidden: true }),
+      within(listbox as HTMLElement).getByRole("option", { name: "進行役", hidden: true }),
     );
     expect(onChangeSegmentSpeaker).toHaveBeenCalledTimes(2);
-    expect(onChangeSegmentSpeaker).toHaveBeenNthCalledWith(1, "s1", "seg-2", "pharmacist");
-    expect(onChangeSegmentSpeaker).toHaveBeenNthCalledWith(2, "s1", "seg-3", "pharmacist");
+    expect(onChangeSegmentSpeaker).toHaveBeenNthCalledWith(1, "s1", "seg-2", "host");
+    expect(onChangeSegmentSpeaker).toHaveBeenNthCalledWith(2, "s1", "seg-3", "host");
   });
 
-  it("話者不明（unknown）のターンは data-speaker-role='unknown' で描画する", () => {
+  it("任意の話者IDと明示した不確かな表示を扱える", () => {
     const { container } = render(
       <TranscriptChat
         title="文字起こし"
@@ -172,8 +181,9 @@ describe("TranscriptChat", () => {
             segmentId: "seg-u",
             channelIndex: 1,
             align: "left",
-            speakerRole: "unknown",
-            roleName: "話者不明",
+            speakerId: "guest-42",
+            isSpeakerUncertain: true,
+            roleName: "未割当",
             timeLabel: "00:08.0",
             text: "はい。",
             status: "final",
@@ -185,9 +195,10 @@ describe("TranscriptChat", () => {
       />,
     );
 
-    const turn = container.querySelector('li[data-speaker-role="unknown"]');
+    const turn = container.querySelector('li[data-speaker-id="guest-42"]');
     expect(turn).toBeInTheDocument();
-    expect(screen.getByText("話者不明")).toBeInTheDocument();
+    expect(turn).toHaveAttribute("data-speaker-uncertain", "true");
+    expect(screen.getByText("未割当")).toBeInTheDocument();
   });
 
   it("削除ボタン押下で対象セグメントのみ削除ハンドラを呼び、interim には表示しない", async () => {
@@ -202,8 +213,8 @@ describe("TranscriptChat", () => {
             streamId: "s1",
             segmentId: "seg-interim",
             channelIndex: 0 as const,
-            speakerRole: "pharmacist" as const,
-            roleName: "薬剤師",
+            speakerId: "host" as const,
+            roleName: "進行役",
             timeLabel: "00:09.5",
             text: "確認します…",
             status: "interim" as const,

@@ -3,6 +3,6 @@ export {
   TranscriptChat,
   type TranscriptChatProps,
   type TranscriptChatSegment,
+  type TranscriptSpeakerId,
   type TranscriptSpeakerOption,
-  type TranscriptSpeakerRole,
 } from "./TranscriptChat";

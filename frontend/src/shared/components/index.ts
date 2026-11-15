@@ -29,8 +29,8 @@ export {
   TranscriptChat,
   type TranscriptChatProps,
   type TranscriptChatSegment,
+  type TranscriptSpeakerId,
   type TranscriptSpeakerOption,
-  type TranscriptSpeakerRole,
 } from "./transcript-chat";
 export {
   TranscriptFeed,

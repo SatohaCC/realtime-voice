@@ -3,7 +3,7 @@ import { useState } from "react";
 import type {
   SoapPanelSectionView,
   TranscriptChatSegment,
-  TranscriptSpeakerRole,
+  TranscriptSpeakerId,
 } from "@/shared/components";
 import {
   TranscriptionWorkspaceView,
@@ -16,7 +16,7 @@ const SAMPLE_SEGMENTS: readonly TranscriptChatSegment[] = [
     segmentId: "seg-1",
     channelIndex: 0,
     align: "right",
-    speakerRole: "pharmacist",
+    speakerId: "pharmacist",
     roleName: "薬剤師",
     timeLabel: "00:01.2",
     text: "こんにちは。本日はどのようなお薬でお困りですか？",
@@ -28,7 +28,7 @@ const SAMPLE_SEGMENTS: readonly TranscriptChatSegment[] = [
     segmentId: "seg-2",
     channelIndex: 1,
     align: "left",
-    speakerRole: "patient",
+    speakerId: "patient",
     roleName: "患者",
     timeLabel: "00:04.8",
     text: "昨日から喉が痛くて、今朝の体温が37.8℃ありました。長いカタカナ用語やURL風文字列 https://example.com/very-long-medication-guidance-path-without-spaces も折り返されます。",
@@ -40,7 +40,7 @@ const SAMPLE_SEGMENTS: readonly TranscriptChatSegment[] = [
     segmentId: "seg-3",
     channelIndex: 0,
     align: "right",
-    speakerRole: "pharmacist",
+    speakerId: "pharmacist",
     roleName: "薬剤師",
     timeLabel: "00:10.5",
     text: "毎食後に1錠ずつ服用して、3日以上熱が続く場合は受診してください。",
@@ -137,7 +137,7 @@ const SAMPLE_SECTIONS: readonly SoapPanelSectionView[] = [
   },
 ];
 
-const SPEAKER_LABELS: Record<TranscriptSpeakerRole, string> = {
+const SPEAKER_LABELS: Record<TranscriptSpeakerId, string> = {
   pharmacist: "薬剤師",
   patient: "患者",
   unknown: "話者不明",
@@ -213,15 +213,15 @@ function InteractiveWorkspaceHarness(props: Partial<TranscriptionWorkspaceViewPr
           { value: "patient", label: "患者" },
         ],
         getSpeakerSelectLabel: ({ timeLabel }) => `${timeLabel} の話者を変更`,
-        onChangeSegmentSpeaker: (streamId, segmentId, speakerRole) => {
+        onChangeSegmentSpeaker: (streamId, segmentId, speakerId) => {
           setSegments((prev) =>
             prev.map((seg) =>
               seg.streamId === streamId && seg.segmentId === segmentId
                 ? {
                     ...seg,
-                    speakerRole,
-                    roleName: SPEAKER_LABELS[speakerRole],
-                    align: speakerRole === "pharmacist" ? "right" : "left",
+                    speakerId,
+                    roleName: SPEAKER_LABELS[speakerId],
+                    align: speakerId === "pharmacist" ? "right" : "left",
                   }
                 : seg,
             ),

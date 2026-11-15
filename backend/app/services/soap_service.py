@@ -538,6 +538,7 @@ class SoapStateManager:
 
                 refreshed_evidence: list[SoapEvidenceModel] = []
                 evidence_changed = False
+                requires_rebuild = False
                 for ev in item.evidence:
                     seg = segments_lookup.get((ev.stream_id, ev.segment_id))
                     if (
@@ -547,7 +548,10 @@ class SoapStateManager:
                         or not self._quote_matches(ev.quote, seg.text)
                     ):
                         evidence_changed = True
+                        requires_rebuild = True
                         continue
+                    if seg.speaker_role != ev.speaker_role:
+                        requires_rebuild = True
                     if (
                         seg.segment_revision != ev.segment_revision
                         or seg.speaker_role != ev.speaker_role
@@ -569,8 +573,11 @@ class SoapStateManager:
 
                 dirty_sections.add(section_key_typed)
                 applied += 1
-                if not refreshed_evidence or not self._is_section_evidence_allowed(
-                    section_key_typed, refreshed_evidence
+                # 統合本文を部分削除できないため、根拠の欠落・話者変更では全体を撤回する。
+                if (
+                    requires_rebuild
+                    or not refreshed_evidence
+                    or not self._is_section_evidence_allowed(section_key_typed, refreshed_evidence)
                 ):
                     retracted_ids.append(item.item_id)
                     continue
@@ -594,7 +601,7 @@ class SoapStateManager:
             section.items = kept_items
 
         if applied > 0:
-            if "P" in dirty_sections and working.sections.A.items:
+            if dirty_sections.intersection({"S", "O", "P"}) and working.sections.A.items:
                 marked_a = False
                 for a_item in working.sections.A.items:
                     if a_item.origin == "plan_inference" and not a_item.stale_after_plan_update:

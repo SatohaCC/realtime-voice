@@ -993,6 +993,44 @@ def test_extract_payload_includes_recent_context_and_trims_it_before_failing() -
     asyncio.run(_run())
 
 
+@pytest.mark.parametrize("section,channel,new_role", [("S", 1, "pharmacist"), ("P", 0, "patient")])
+def test_reconcile_retracts_whole_summary_when_one_of_two_speakers_changes(
+    section: str, channel: int, new_role: str
+) -> None:
+    conv = ConversationTranscriptState(conversation_id="summary-correction")
+    conv.start_stream("s1")
+    for start, text in enumerate(("頭が痛いです", "吐き気があります")):
+        conv.apply_deepgram_event(
+            DeepgramTranscriptInput(channel, text, True, True, start * 2, start * 2 + 1, 0.9)
+        )
+    first, second = conv.finalized_segments
+    manager = SoapStateManager(conversation_id=conv.conversation_id)
+    added = manager.apply_extract_soap_raw(
+        raw_result={
+            "operations": [
+                {
+                    "section": section,
+                    "action": "add",
+                    "text": "頭痛と吐き気。",
+                    "evidence_refs": [_evidence(first), _evidence(second)],
+                }
+            ]
+        },
+        segments_lookup={(s.stream_id, s.segment_id): s for s in conv.finalized_segments},
+        processed_transcript_revision=conv.transcript_revision,
+    )
+    item_id = getattr(added.soap.sections, section).items[0].item_id
+    corrected = second.model_copy(update={"speaker_role": new_role, "segment_revision": 2})
+    outcome = manager.reconcile_transcript_segments(
+        {
+            (first.stream_id, first.segment_id): first,
+            (second.stream_id, second.segment_id): corrected,
+        }
+    )
+    assert getattr(outcome.soap.sections, section).items == []
+    assert item_id in outcome.retracted_item_ids
+
+
 def test_unknown_speaker_blocked_and_reconcile_retracts_invalidated_soap_items() -> None:
     from app.schemas.soap import TranscriptSegmentModel
 

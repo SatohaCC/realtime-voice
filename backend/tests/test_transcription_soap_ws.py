@@ -1555,6 +1555,83 @@ def test_rest_delete_conversation_segment_reconciles_soap_after_stop() -> None:
         app.dependency_overrides.pop(get_current_user, None)
 
 
+@pytest.mark.parametrize("fail_rebuild", [False, True])
+def test_speaker_correction_rebuilds_all_summary_sources_and_never_keeps_stale_text(
+    fail_rebuild: bool,
+) -> None:
+    from app.services.conversation_service import DeepgramTranscriptInput
+
+    class RebuildLlm(FakeSoapLlmClient):
+        async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
+            if fail_rebuild:
+                raise SoapLlmClientError("再生成失敗", code="LLM_INVALID_OUTPUT")
+            return await super().extract_soap(payload)
+
+    async def run() -> None:
+        registry = ConversationSessionRegistry()
+        record = registry.get_or_create(user_id="u", conversation_id="correction-summary")
+        stream = record.transcript_state.start_stream("s1")
+        for start, text in enumerate(("頭が痛いです", "吐き気があります")):
+            record.transcript_state.apply_deepgram_event(
+                DeepgramTranscriptInput(1, text, True, True, start * 2, start * 2 + 1, 0.9)
+            )
+        first, second = record.transcript_state.finalized_segments
+        lookup = {(s.stream_id, s.segment_id): s for s in (first, second)}
+        record.soap_manager.apply_extract_soap_raw(
+            raw_result={
+                "operations": [
+                    {
+                        "section": "S",
+                        "action": "add",
+                        "text": "頭痛と吐き気。",
+                        "evidence_refs": [
+                            {
+                                "stream_id": s.stream_id,
+                                "segment_id": s.segment_id,
+                                "segment_revision": s.segment_revision,
+                                "quote": s.text,
+                            }
+                            for s in (first, second)
+                        ],
+                    }
+                ]
+            },
+            segments_lookup=lookup,
+            processed_transcript_revision=record.transcript_state.transcript_revision,
+        )
+        coordinator = _SoapSessionCoordinator(
+            record=record,
+            stream_id=stream,
+            generation=record.active_generation,
+            queue=BoundedWsOutboundQueue(maxsize=64),
+            llm_client=RebuildLlm(),
+            timing=_fast_timing(),
+        )
+        coordinator.handle_segment_speaker_override(
+            {
+                "type": "UpdateSegmentSpeaker",
+                "stream_id": stream,
+                "segment_id": second.segment_id,
+                "speaker_role": "pharmacist",
+            }
+        )
+        assert record.soap_manager.note.sections.S.items == []
+        ok = await coordinator._run_extract_step(retries=0)
+        assert ok is not fail_rebuild
+        if fail_rebuild:
+            assert record.soap_manager.note.sections.S.items == []
+            assert record.soap_status == "error"
+        else:
+            assert record.soap_manager.note.sections.S.items[0].text == first.text
+            assert all(
+                second.segment_id != ev.segment_id
+                for item in record.soap_manager.note.sections.S.items
+                for ev in item.evidence
+            )
+
+    asyncio.run(run())
+
+
 def test_concurrent_speaker_override_during_extract_retries_with_fresh_snapshot() -> None:
     from app.services.conversation_service import DeepgramTranscriptInput
 

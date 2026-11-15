@@ -5,10 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Button, IconButton, Select } from "@/shared/ui";
 import { transcriptChatStyles as s } from "./TranscriptChat.styles";
 
-export type TranscriptSpeakerRole = "pharmacist" | "patient" | "unknown";
+export type TranscriptSpeakerId = string;
 
 export interface TranscriptSpeakerOption {
-  value: TranscriptSpeakerRole;
+  value: TranscriptSpeakerId;
   label: string;
 }
 
@@ -17,7 +17,9 @@ export interface TranscriptChatSegment {
   segmentId: string;
   channelIndex: 0 | 1;
   align?: "left" | "right";
-  speakerRole?: TranscriptSpeakerRole;
+  speakerId?: TranscriptSpeakerId;
+  /** 話者の確度が低い表示にするか。識別子の値からは推測しない。 */
+  isSpeakerUncertain?: boolean;
   roleName: string;
   micLabel?: string;
   timeLabel: string;
@@ -39,7 +41,7 @@ export interface TranscriptChatProps {
   onChangeSegmentSpeaker?: (
     streamId: string,
     segmentId: string,
-    speakerRole: TranscriptSpeakerRole,
+    speakerId: TranscriptSpeakerId,
   ) => void;
   getSegmentToggleLabel?: (segment: {
     timeLabel: string;
@@ -54,7 +56,8 @@ interface GroupedTurn {
   turnKey: string;
   channelIndex: 0 | 1;
   align: "left" | "right";
-  speakerRole?: TranscriptSpeakerRole;
+  speakerId?: TranscriptSpeakerId;
+  isSpeakerUncertain?: boolean;
   roleName: string;
   micLabel?: string;
   timeLabel: string;
@@ -82,7 +85,8 @@ export function groupTranscriptTurns(
       !last.isInterim &&
       last.channelIndex === segment.channelIndex &&
       last.align === align &&
-      last.speakerRole === segment.speakerRole &&
+      last.speakerId === segment.speakerId &&
+      Boolean(last.isSpeakerUncertain) === Boolean(segment.isSpeakerUncertain) &&
       last.roleName === segment.roleName
     ) {
       groups[groups.length - 1] = {
@@ -95,7 +99,8 @@ export function groupTranscriptTurns(
       turnKey: key,
       channelIndex: segment.channelIndex,
       align,
-      speakerRole: segment.speakerRole,
+      speakerId: segment.speakerId,
+      isSpeakerUncertain: segment.isSpeakerUncertain,
       roleName: segment.roleName,
       micLabel: segment.micLabel,
       timeLabel: segment.timeLabel,
@@ -213,7 +218,7 @@ export function TranscriptChat({
             <ul aria-label={title} {...stylex.props(s.turnList)}>
               {turns.map((turn) => {
                 const isRight = turn.align === "right";
-                const isUnknown = turn.speakerRole === "unknown";
+                const isUnknown = turn.isSpeakerUncertain;
                 const roleChipStyle = isUnknown
                   ? s.roleChipUnknown
                   : isRight
@@ -227,17 +232,18 @@ export function TranscriptChat({
                 const canChangeSpeaker =
                   Boolean(onChangeSegmentSpeaker) &&
                   !turn.isInterim &&
-                  Boolean(turn.speakerRole) &&
+                  Boolean(turn.speakerId) &&
                   Boolean(speakerOptions && speakerOptions.length > 0);
                 return (
                   <li
                     key={turn.turnKey}
                     data-align={turn.align}
-                    data-speaker-role={turn.speakerRole}
+                    data-speaker-id={turn.speakerId}
+                    data-speaker-uncertain={turn.isSpeakerUncertain || undefined}
                     {...stylex.props(s.turnRow, isRight ? s.turnRowRight : s.turnRowLeft)}
                   >
                     <div {...stylex.props(s.turnMeta)}>
-                      {canChangeSpeaker && turn.speakerRole && speakerOptions ? (
+                      {canChangeSpeaker && turn.speakerId && speakerOptions ? (
                         <Select
                           size="sm"
                           hideLabel
@@ -248,11 +254,11 @@ export function TranscriptChat({
                             }) ?? `${turn.timeLabel} (${turn.roleName})`
                           }
                           options={speakerOptions}
-                          value={turn.speakerRole}
+                          value={turn.speakerId}
                           disabled={segmentActionsDisabled}
                           onValueChange={(nextValue) => {
                             if (!nextValue || !onChangeSegmentSpeaker) return;
-                            const nextRole = nextValue as TranscriptSpeakerRole;
+                            const nextRole = nextValue;
                             for (const item of turn.items) {
                               onChangeSegmentSpeaker(item.streamId, item.segmentId, nextRole);
                             }
