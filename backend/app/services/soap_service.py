@@ -193,7 +193,6 @@ class SoapStateManager:
         applied = 0
         rejected = 0
         dirty_sections: set[SoapSectionKey] = set()
-        plan_changed = False
 
         for op in parsed.operations:
             resolved_evidence = self._resolve_evidence(op.evidence_refs, segments_lookup)
@@ -226,8 +225,6 @@ class SoapStateManager:
                         segments_lookup=segments_lookup,
                     )
                     dirty_sections.add(op.section)
-                    if op.section == "P":
-                        plan_changed = True
                     changed_ids.append(existing.item_id)
                     applied += 1
                     continue
@@ -246,8 +243,6 @@ class SoapStateManager:
                 )
                 dest_section.items.append(item)
                 dirty_sections.add(op.section)
-                if op.section == "P":
-                    plan_changed = True
                 changed_ids.append(item_id)
                 applied += 1
                 continue
@@ -291,8 +286,6 @@ class SoapStateManager:
                     self._section_of(working, dest_key).items.append(moved)
                     dirty_sections.add(op.section)
                     dirty_sections.add(dest_key)
-                    if op.section == "P" or dest_key == "P":
-                        plan_changed = True
                     changed_ids.append(new_item_id)
                 else:
                     src_section.items[existing_idx] = self._build_updated_item(
@@ -304,8 +297,6 @@ class SoapStateManager:
                         segments_lookup=segments_lookup,
                     )
                     dirty_sections.add(op.section)
-                    if op.section == "P":
-                        plan_changed = True
                     changed_ids.append(existing.item_id)
                 applied += 1
                 continue
@@ -325,12 +316,10 @@ class SoapStateManager:
                     continue
                 src_section.items.pop(existing_idx)
                 dirty_sections.add(op.section)
-                if op.section == "P":
-                    plan_changed = True
                 retracted_ids.append(op.item_id)
                 applied += 1
 
-        if plan_changed:
+        if dirty_sections & {"S", "O", "P"}:
             for idx, a_item in enumerate(working.sections.A.items):
                 if a_item.origin == "plan_inference" and not a_item.stale_after_plan_update:
                     working.sections.A.items[idx] = a_item.model_copy(

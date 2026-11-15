@@ -444,6 +444,70 @@ def test_atomic_update_section_move_and_retract_validation() -> None:
     assert moved.soap.sections.P.items[0].item_revision == 2
 
 
+@pytest.mark.parametrize("section", ["S", "O"])
+@pytest.mark.parametrize("action", ["add", "update", "retract", "move", "rejected"])
+def test_inferred_a_tracks_so_changes_after_resume(section: str, action: str) -> None:
+    async def _run() -> None:
+        conv, lookup = _setup_conversation()
+        manager = SoapStateManager(conversation_id=conv.conversation_id)
+        llm = FakeSoapLlmClient()
+        await manager.run_extract_spoa(
+            llm_client=llm,
+            new_segments=conv.finalized_segments,
+            segments_snapshot_lookup=lookup,
+            current_segments_lookup=lookup,
+            target_processed_transcript_revision=conv.transcript_revision,
+        )
+        manager.apply_extract_spoa_raw(
+            raw_result={
+                "operations": [
+                    {
+                        "action": "add",
+                        "section": "S",
+                        "text": conv.segments[1].text,
+                        "evidence_refs": [_evidence(conv.segments[1])],
+                    }
+                ]
+            },
+            segments_lookup=lookup,
+            processed_transcript_revision=conv.transcript_revision,
+        )
+        await manager.run_finalize_a_from_p(llm_client=llm, current_segments_lookup=lookup)
+        before = manager.note
+        assert not manager.has_stale_plan_inference()
+        item = getattr(before.sections, section).items[0]
+        op: dict[str, Any] = {
+            "action": "update" if action in {"move", "rejected"} else action,
+            "section": section,
+            "item_id": "missing" if action == "rejected" else item.item_id,
+            "text": "発言の訂正",
+            "evidence_refs": [_evidence(conv.segments[1])],
+        }
+        if action == "move":
+            op["target_section"] = "O" if section == "S" else "S"
+        if action == "retract":
+            op["retraction_reason"] = "発言の訂正"
+        outcome = manager.apply_extract_spoa_raw(
+            raw_result={"operations": [op]},
+            segments_lookup=lookup,
+            processed_transcript_revision=conv.transcript_revision + 1,
+        )
+        expected_stale = action != "rejected"
+        assert manager.has_stale_plan_inference() is expected_stale
+        assert outcome.soap.sections.P == before.sections.P
+        assert [i for i in outcome.soap.sections.A.items if i.origin == "conversation"] == [
+            i for i in before.sections.A.items if i.origin == "conversation"
+        ]
+        assert outcome.soap.sections.A.revision == before.sections.A.revision + int(expected_stale)
+        inferred = [i for i in outcome.soap.sections.A.items if i.origin == "plan_inference"]
+        assert inferred and all(i.stale_after_plan_update is expected_stale for i in inferred)
+        if expected_stale:
+            await manager.run_finalize_a_from_p(llm_client=llm, current_segments_lookup=lookup)
+            assert not manager.has_stale_plan_inference()
+
+    asyncio.run(_run())
+
+
 def test_fake_llm_flow_preserves_spoken_a_and_marks_stale_after_resume_p_update() -> None:
     async def _run() -> None:
         conv, lookup = _setup_conversation()
