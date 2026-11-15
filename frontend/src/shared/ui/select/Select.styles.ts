@@ -45,7 +45,9 @@ export const selectStyles = stylex.create({
     backgroundColor: tokens.surfaceContainerLowest,
     backgroundImage: {
       default: "none",
+      ":focus-visible": tokens.stateFocus,
       "@media (hover: hover)": { ":hover": tokens.stateHover },
+      ":active": tokens.statePress,
     },
     color: tokens.onSurface,
     fontFamily: "inherit",
@@ -64,7 +66,12 @@ export const selectStyles = stylex.create({
     backgroundColor: tokens.disabledContainer,
     color: tokens.disabledContent,
     borderColor: tokens.outlineVariant,
-    backgroundImage: { default: "none", "@media (hover: hover)": { ":hover": "none" } },
+    backgroundImage: {
+      default: "none",
+      ":focus-visible": "none",
+      "@media (hover: hover)": { ":hover": "none" },
+      ":active": "none",
+    },
   },
   value: {
     minWidth: 0,
@@ -109,6 +116,13 @@ export const selectStyles = stylex.create({
     cursor: "pointer",
     userSelect: "none",
     outline: "none",
+    backgroundImage: {
+      default: "none",
+      ":active": tokens.statePress,
+    },
+    transitionProperty: "background-color",
+    transitionDuration: tokens.motionDuration,
+    transitionTimingFunction: tokens.motionEasing,
   },
   itemHighlighted: {
     backgroundColor: tokens.surfaceContainerHighest,

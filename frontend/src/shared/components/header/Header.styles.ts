@@ -73,8 +73,17 @@ export const headerStyles = stylex.create({
     borderRadius: tokens.cornerMedium,
     flexShrink: 1,
     minWidth: 0,
+    backgroundImage: {
+      default: "none",
+      ":focus-visible": tokens.stateFocus,
+      "@media (hover: hover)": { ":hover": tokens.stateHover },
+      ":active": tokens.statePress,
+    },
     outline: { default: "none", ":focus-visible": `3px solid ${tokens.primary}` },
     outlineOffset: "2px",
+    transitionProperty: "background-color, color",
+    transitionDuration: tokens.motionDuration,
+    transitionTimingFunction: tokens.motionEasing,
   },
   brandMark: {
     display: "inline-flex",
@@ -143,6 +152,7 @@ export const headerStyles = stylex.create({
     backgroundColor: "transparent",
     backgroundImage: {
       default: "none",
+      ":focus-visible": tokens.stateFocus,
       "@media (hover: hover)": { ":hover": tokens.stateHover },
       ":active": tokens.statePress,
     },

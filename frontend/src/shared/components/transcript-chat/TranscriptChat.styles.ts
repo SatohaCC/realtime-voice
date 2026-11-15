@@ -153,12 +153,13 @@ export const transcriptChatStyles = stylex.create({
   bubbleRight: {
     backgroundColor: tokens.tertiaryContainer,
     color: tokens.onTertiaryContainer,
-    borderColor: `color-mix(in srgb, ${tokens.tertiary} 45%, ${tokens.outlineVariant})`,
+    borderColor: tokens.tertiary,
     borderTopRightRadius: tokens.cornerExtraSmall,
   },
   bubbleInterim: {
+    backgroundColor: tokens.surfaceContainer,
+    borderColor: tokens.outline,
     borderStyle: "dashed",
-    opacity: 0.9,
   },
   segmentStack: {
     display: "flex",
@@ -200,7 +201,7 @@ export const transcriptChatStyles = stylex.create({
     alignItems: "center",
     justifyContent: "center",
     gap: "0.35rem",
-    minHeight: "2.25rem",
+    minHeight: { default: "2.5rem", "@media (pointer: coarse)": "2.75rem" },
     paddingInline: "1rem",
     paddingBlock: "0.45rem",
     borderRadius: tokens.cornerFull,
@@ -208,6 +209,12 @@ export const transcriptChatStyles = stylex.create({
     borderStyle: "solid",
     borderColor: tokens.primary,
     backgroundColor: tokens.primary,
+    backgroundImage: {
+      default: "none",
+      ":focus-visible": tokens.stateFocus,
+      "@media (hover: hover)": { ":hover": tokens.stateHover },
+      ":active": tokens.statePress,
+    },
     color: tokens.onPrimary,
     fontSize: "0.8125rem",
     fontWeight: 600,
@@ -215,8 +222,11 @@ export const transcriptChatStyles = stylex.create({
     boxShadow: tokens.shadow2,
     outline: {
       default: "none",
-      ":focus-visible": `2px solid ${tokens.primary}`,
+      ":focus-visible": `3px solid ${tokens.primary}`,
     },
-    outlineOffset: "2px",
+    outlineOffset: "3px",
+    transitionProperty: "background-color, box-shadow",
+    transitionDuration: tokens.motionDuration,
+    transitionTimingFunction: tokens.motionEasing,
   },
 });
