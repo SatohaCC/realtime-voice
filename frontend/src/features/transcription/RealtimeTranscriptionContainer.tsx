@@ -159,8 +159,8 @@ const SECTION_DEFINITIONS: readonly {
   {
     key: "A",
     codeLabel: "A",
-    title: "A 評価",
-    emptyLabel: "評価項目はまだありません。",
+    title: "A アセスメント",
+    emptyLabel: "アセスメント項目はまだありません。",
   },
   {
     key: "P",
@@ -219,33 +219,36 @@ export function RealtimeTranscriptionContainer() {
     }
   }, [conversation.soap]);
 
-  const channels: MicChannelView[] = [
-    {
-      id: "mic1",
-      label: audio.mode === "dual" ? "マイク 1 · 薬剤師 (P/A)" : "マイク 1 · モノラル",
-      selectedDeviceId: audio.mic1DeviceId,
-      deviceSelectLabel: "マイク 1 入力デバイス",
-      levelLabel: "マイク 1 入力レベル",
-      level: toDisplayLevel(audio.levels[0]),
-      isSpeaking: audio.speaking[0],
-      speakingLabel: "発話中",
-      idleLabel: "無音",
-    },
-  ];
+  const mic1Channel: MicChannelView = {
+    id: "mic1",
+    label: audio.mode === "dual" ? "薬剤師 (P/A)" : "モノラル",
+    selectedDeviceId: audio.mic1DeviceId,
+    deviceSelectLabel: audio.mode === "dual" ? "薬剤師 入力デバイス" : "入力デバイス",
+    levelLabel: audio.mode === "dual" ? "薬剤師 入力レベル" : "入力レベル",
+    level: toDisplayLevel(audio.levels[0]),
+    isSpeaking: audio.speaking[0],
+    speakingLabel: "発話中",
+    idleLabel: "無音",
+  };
 
-  if (audio.mode === "dual") {
-    channels.push({
-      id: "mic2",
-      label: "マイク 2 · 患者 (S)",
-      selectedDeviceId: audio.mic2DeviceId,
-      deviceSelectLabel: "マイク 2 入力デバイス",
-      levelLabel: "マイク 2 入力レベル",
-      level: toDisplayLevel(audio.levels[1]),
-      isSpeaking: audio.speaking[1],
-      speakingLabel: "発話中",
-      idleLabel: "無音",
-    });
-  }
+  // DOM 順と視覚順・Tab 順を一致させるため、2マイク時は左に患者、右に薬剤師を配置する
+  const channels: MicChannelView[] =
+    audio.mode === "dual"
+      ? [
+          {
+            id: "mic2",
+            label: "患者 (S)",
+            selectedDeviceId: audio.mic2DeviceId,
+            deviceSelectLabel: "患者 入力デバイス",
+            levelLabel: "患者 入力レベル",
+            level: toDisplayLevel(audio.levels[1]),
+            isSpeaking: audio.speaking[1],
+            speakingLabel: "発話中",
+            idleLabel: "無音",
+          },
+          mic1Channel,
+        ]
+      : [mic1Channel];
 
   const isActive = audio.isCapturing || isStreaming;
   const controlStatusBadge = error
@@ -269,8 +272,8 @@ export function RealtimeTranscriptionContainer() {
           streamId: segment.stream_id,
           segmentId: segment.segment_id,
           channelIndex: segment.channel_index,
+          align: segment.speaker_role === "pharmacist" ? "right" : "left",
           roleName: segment.speaker_role === "pharmacist" ? "薬剤師" : "患者",
-          micLabel: segment.channel_index === 0 ? "マイク1" : "マイク2",
           timeLabel: formatTimestamp(segment.start_sec),
           text: segment.text,
           status: segment.status,
@@ -280,8 +283,8 @@ export function RealtimeTranscriptionContainer() {
           streamId: "single",
           segmentId: segment.id,
           channelIndex: segment.channelIndex,
+          align: "left",
           roleName: "話者",
-          micLabel: "マイク1",
           timeLabel: formatTimestamp(segment.startSec),
           text: segment.text,
           status: segment.status,
@@ -300,9 +303,9 @@ export function RealtimeTranscriptionContainer() {
       }
       if (def.key === "A") {
         if (item.origin === "plan_inference") {
-          badges.push({ label: "Pからの推測案・要確認", tone: "neutral" });
+          badges.push({ label: "S/O・Pからの推測案・要確認", tone: "neutral" });
         } else {
-          badges.push({ label: "発言由来の評価", tone: "success" });
+          badges.push({ label: "発言由来のアセスメント", tone: "success" });
         }
         if (item.stale_after_plan_update) {
           badges.push({ label: "P更新後は未反映", tone: "danger" });
@@ -323,11 +326,16 @@ export function RealtimeTranscriptionContainer() {
       };
     });
 
+    const emptyLabel =
+      def.key === "A" && isStreaming && audio.mode === "dual"
+        ? "文字起こし停止時に S・O・P から推測案を自動生成します。"
+        : def.emptyLabel;
+
     return {
       key: def.key,
       codeLabel: def.codeLabel,
       title: def.title,
-      emptyLabel: def.emptyLabel,
+      emptyLabel,
       items,
     };
   });
@@ -342,13 +350,13 @@ export function RealtimeTranscriptionContainer() {
     audio.mode === "single"
       ? "1マイクモードは文字起こしのみ行います（薬剤師・患者の話者分離と SOAP 自動生成は 2マイクモードで利用してください）。"
       : audio.hasDuplicateDevices
-        ? "マイク 1（薬剤師）とマイク 2（患者）に同じデバイスが選ばれています。別のマイクを指定するか「1マイク」へ切り替えてください。"
+        ? "患者用と薬剤師用に同じデバイスが選ばれています。別のマイクを指定するか「1マイク」へ切り替えてください。"
         : null;
 
   const soapBannerText =
     conversation.soapStatusMessage ??
     (isStopping && audio.mode === "dual"
-      ? "最終発話を同期し、A 評価案の最終更新を実行しています..."
+      ? "最終発話を同期し、A アセスメント案の最終更新を実行しています..."
       : null);
   const soapBannerTone: "info" | "error" = effectiveSoapStatus === "error" ? "error" : "info";
 
@@ -400,7 +408,7 @@ export function RealtimeTranscriptionContainer() {
         countLabel: `${chatSegments.length} 件`,
         segments: chatSegments,
         emptyMessage:
-          "「文字起こし開始」を押して話しかけると、薬剤師（左）と患者（右）の会話が表示されます。",
+          "「文字起こし開始」を押して話しかけると、患者（左）と薬剤師（右）の会話が表示されます。",
         scrollToBottomLabel: "↓ 新しい発話",
         highlightedSegmentKey,
       }}

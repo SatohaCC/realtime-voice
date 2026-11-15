@@ -8,8 +8,9 @@ import "./globals.css";
 import { layoutStyles } from "./layout.styles";
 
 export const metadata: Metadata = {
-  title: "Realtime Voice",
-  description: "Next.js + FastAPI starter template",
+  title: "Realtime Voice | 薬局服薬指導 リアルタイム文字起こし・SOAP支援",
+  description:
+    "患者・薬剤師の2マイク音声をリアルタイム文字起こしし、根拠付きの S・O・P・A 薬歴下書きを自動生成するワークスペース。",
 };
 
 export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

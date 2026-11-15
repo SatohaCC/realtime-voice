@@ -49,13 +49,21 @@ class SoapStateManager:
     def has_stale_plan_inference(self) -> bool:
         return any(item.stale_after_plan_update for item in self._note.sections.A.items)
 
+    def mark_transcript_processed(self, processed_transcript_revision: int) -> None:
+        """LLM 呼び出し不要な発話（相槌等）のみだった場合に処理済み版だけ進める。"""
+        self._note.processed_transcript_revision = max(
+            self._note.processed_transcript_revision,
+            processed_transcript_revision,
+        )
+
     def build_extract_payload(
         self,
         *,
         new_segments: list[TranscriptSegmentModel],
         all_final_segments: list[TranscriptSegmentModel],
+        max_context_segments: int = 6,
     ) -> dict[str, Any]:
-        """会話中 extract_spoa 用の入力辞書を構築する（関連根拠の過去発話も含める）。"""
+        """会話中 extract_spoa 用の入力辞書を構築する（根拠発話と直近文脈も含める）。"""
         referenced_keys: set[tuple[str, str]] = set()
         for section in (
             self._note.sections.S,
@@ -74,21 +82,35 @@ class SoapStateManager:
             if (seg.stream_id, seg.segment_id) in referenced_keys
             and (seg.stream_id, seg.segment_id) not in new_keys
         ]
+        recent_context = [
+            seg.model_dump(mode="json")
+            for seg in all_final_segments
+            if (seg.stream_id, seg.segment_id) not in referenced_keys
+            and (seg.stream_id, seg.segment_id) not in new_keys
+        ]
+        if max_context_segments > 0 and len(recent_context) > max_context_segments:
+            recent_context = recent_context[-max_context_segments:]
+        elif max_context_segments <= 0:
+            recent_context = []
+
         return {
             "conversation_id": self._note.conversation_id,
             "base_soap_revision": self._note.revision,
             "processed_transcript_revision": self._note.processed_transcript_revision,
             "current_soap": self._note.model_dump(mode="json"),
             "supporting_segments": supporting_segments,
+            "recent_context_segments": recent_context,
             "new_segments": [seg.model_dump(mode="json") for seg in new_segments],
         }
 
     def build_finalize_a_payload(self) -> dict[str, Any]:
-        """停止時 finalize_a_from_p 用の入力辞書を構築する。"""
+        """停止時 finalize_a_from_p 用の入力辞書を構築する（S/O 情報も参照用に渡す）。"""
         return {
             "conversation_id": self._note.conversation_id,
             "base_soap_revision": self._note.revision,
             "plan_revision": self._note.sections.P.revision,
+            "s_items": [item.model_dump(mode="json") for item in self._note.sections.S.items],
+            "o_items": [item.model_dump(mode="json") for item in self._note.sections.O.items],
             "plan_items": [item.model_dump(mode="json") for item in self._note.sections.P.items],
             "existing_a_items": [
                 item.model_dump(mode="json") for item in self._note.sections.A.items
@@ -171,7 +193,6 @@ class SoapStateManager:
         applied = 0
         rejected = 0
         dirty_sections: set[SoapSectionKey] = set()
-        plan_changed = False
 
         for op in parsed.operations:
             resolved_evidence = self._resolve_evidence(op.evidence_refs, segments_lookup)
@@ -190,6 +211,24 @@ class SoapStateManager:
                     rejected += 1
                     continue
 
+                dest_section = self._section_of(working, op.section)
+                if op.section in {"S", "P"} and dest_section.items:
+                    # S/P は1会話1項目を維持するため、既存項目がある場合は防御的に統合更新へ丸める
+                    existing = dest_section.items[0]
+                    merged_text = self._merge_consolidated_text(existing.text, clean_text)
+                    dest_section.items[0] = self._build_updated_item(
+                        existing=existing,
+                        section=op.section,
+                        text=merged_text,
+                        requested_verification=op.verification_status,
+                        resolved_evidence=resolved_evidence,
+                        segments_lookup=segments_lookup,
+                    )
+                    dirty_sections.add(op.section)
+                    changed_ids.append(existing.item_id)
+                    applied += 1
+                    continue
+
                 item_id = self._mint_item_id(op.section)
                 verification = self._resolve_verification_status(
                     op.section, op.verification_status, resolved_evidence
@@ -202,10 +241,8 @@ class SoapStateManager:
                     origin="conversation",
                     verification_status=verification,
                 )
-                self._section_of(working, op.section).items.append(item)
+                dest_section.items.append(item)
                 dirty_sections.add(op.section)
-                if op.section == "P":
-                    plan_changed = True
                 changed_ids.append(item_id)
                 applied += 1
                 continue
@@ -249,28 +286,17 @@ class SoapStateManager:
                     self._section_of(working, dest_key).items.append(moved)
                     dirty_sections.add(op.section)
                     dirty_sections.add(dest_key)
-                    if op.section == "P" or dest_key == "P":
-                        plan_changed = True
                     changed_ids.append(new_item_id)
                 else:
-                    merged_evidence = (
-                        self._merge_plan_evidence(
-                            existing.evidence, resolved_evidence, segments_lookup
-                        )
-                        if op.section == "P"
-                        else resolved_evidence
-                    )
-                    src_section.items[existing_idx] = SoapItemModel(
-                        item_id=existing.item_id,
-                        item_revision=existing.item_revision + 1,
+                    src_section.items[existing_idx] = self._build_updated_item(
+                        existing=existing,
+                        section=op.section,
                         text=next_text,
-                        evidence=merged_evidence,
-                        origin="conversation",
-                        verification_status=verification,
+                        requested_verification=op.verification_status,
+                        resolved_evidence=resolved_evidence,
+                        segments_lookup=segments_lookup,
                     )
                     dirty_sections.add(op.section)
-                    if op.section == "P":
-                        plan_changed = True
                     changed_ids.append(existing.item_id)
                 applied += 1
                 continue
@@ -290,12 +316,10 @@ class SoapStateManager:
                     continue
                 src_section.items.pop(existing_idx)
                 dirty_sections.add(op.section)
-                if op.section == "P":
-                    plan_changed = True
                 retracted_ids.append(op.item_id)
                 applied += 1
 
-        if plan_changed:
+        if dirty_sections & {"S", "O", "P"}:
             for idx, a_item in enumerate(working.sections.A.items):
                 if a_item.origin == "plan_inference" and not a_item.stale_after_plan_update:
                     working.sections.A.items[idx] = a_item.model_copy(
@@ -529,12 +553,56 @@ class SoapStateManager:
         return bool(normalized_quote) and normalized_quote in "".join(text.split())
 
     @staticmethod
-    def _merge_plan_evidence(
+    def _merge_consolidated_text(existing_text: str, addition_text: str) -> str:
+        """既存文と新規文が重複しない場合に句点区切りで結合する。"""
+        base = existing_text.strip()
+        addition = addition_text.strip()
+        if not base:
+            return addition
+        if not addition or addition in base:
+            return base
+        if base in addition:
+            return addition
+        if base[-1] in ("。", "！", "!", "？", "?", "."):
+            return f"{base}{addition}"
+        return f"{base}。{addition}"
+
+    @classmethod
+    def _build_updated_item(
+        cls,
+        *,
+        existing: SoapItemModel,
+        section: SoapSectionKey,
+        text: str,
+        requested_verification: str,
+        resolved_evidence: list[SoapEvidenceModel],
+        segments_lookup: dict[tuple[str, str], TranscriptSegmentModel],
+    ) -> SoapItemModel:
+        """既存要素の逐次更新モデルを構築し、S/P では既存有効根拠も保持する。"""
+        merged_evidence = (
+            cls._merge_section_evidence(existing.evidence, resolved_evidence, segments_lookup)
+            if section in {"S", "P"}
+            else resolved_evidence
+        )
+        verification = cls._resolve_verification_status(
+            section, requested_verification, resolved_evidence
+        )
+        return SoapItemModel(
+            item_id=existing.item_id,
+            item_revision=existing.item_revision + 1,
+            text=text,
+            evidence=merged_evidence,
+            origin="conversation",
+            verification_status=verification,
+        )
+
+    @staticmethod
+    def _merge_section_evidence(
         existing_evidence: list[SoapEvidenceModel],
         resolved_evidence: list[SoapEvidenceModel],
         segments_lookup: dict[tuple[str, str], TranscriptSegmentModel],
     ) -> list[SoapEvidenceModel]:
-        """P の逐次更新時に、有効な既存根拠を失わずに新規根拠を統合する。"""
+        """S / P の逐次更新時に、有効な既存根拠を失わずに新規根拠を統合する。"""
         merged: dict[tuple[str, str], SoapEvidenceModel] = {}
         order: list[tuple[str, str]] = []
         for ev in existing_evidence:

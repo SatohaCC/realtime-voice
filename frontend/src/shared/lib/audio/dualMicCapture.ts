@@ -108,7 +108,8 @@ export async function createDualMicCapture({
     deviceId: deviceId ? { exact: deviceId } : undefined,
     echoCancellation: true,
     noiseSuppression: true,
-    autoGainControl: true,
+    // 2マイクでは回り込んだ遠い声を自動増幅せず、マイク間の音量差を保つ
+    autoGainControl: !useDual,
   });
 
   const streams: MediaStream[] = [];

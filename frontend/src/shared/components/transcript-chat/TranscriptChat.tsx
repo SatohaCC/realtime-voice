@@ -9,8 +9,9 @@ export interface TranscriptChatSegment {
   streamId: string;
   segmentId: string;
   channelIndex: 0 | 1;
+  align?: "left" | "right";
   roleName: string;
-  micLabel: string;
+  micLabel?: string;
   timeLabel: string;
   text: string;
   status: "interim" | "final" | "refined";
@@ -29,8 +30,9 @@ export interface TranscriptChatProps {
 interface GroupedTurn {
   turnKey: string;
   channelIndex: 0 | 1;
+  align: "left" | "right";
   roleName: string;
-  micLabel: string;
+  micLabel?: string;
   timeLabel: string;
   isInterim: boolean;
   statusLabel: string;
@@ -47,8 +49,16 @@ export function groupTranscriptTurns(
   for (const segment of segments) {
     const key = `${segment.streamId}:${segment.segmentId}`;
     const isInterim = segment.status === "interim";
+    const align: "left" | "right" =
+      segment.align ?? (segment.channelIndex === 0 ? "right" : "left");
     const last = groups.at(-1);
-    if (last && !isInterim && !last.isInterim && last.channelIndex === segment.channelIndex) {
+    if (
+      last &&
+      !isInterim &&
+      !last.isInterim &&
+      last.channelIndex === segment.channelIndex &&
+      last.align === align
+    ) {
       groups[groups.length - 1] = {
         ...last,
         items: [...last.items, segment],
@@ -58,6 +68,7 @@ export function groupTranscriptTurns(
     groups.push({
       turnKey: key,
       channelIndex: segment.channelIndex,
+      align,
       roleName: segment.roleName,
       micLabel: segment.micLabel,
       timeLabel: segment.timeLabel,
@@ -168,17 +179,20 @@ export function TranscriptChat({
           ) : (
             <ul aria-label={title} {...stylex.props(s.turnList)}>
               {turns.map((turn) => {
-                const isRight = turn.channelIndex === 1;
+                const isRight = turn.align === "right";
                 return (
                   <li
                     key={turn.turnKey}
+                    data-align={turn.align}
                     {...stylex.props(s.turnRow, isRight ? s.turnRowRight : s.turnRowLeft)}
                   >
                     <div {...stylex.props(s.turnMeta)}>
                       <span {...stylex.props(isRight ? s.roleChipRight : s.roleChipLeft)}>
                         {turn.roleName}
                       </span>
-                      <span {...stylex.props(s.micText)}>{turn.micLabel}</span>
+                      {turn.micLabel ? (
+                        <span {...stylex.props(s.micText)}>{turn.micLabel}</span>
+                      ) : null}
                       <span {...stylex.props(s.timeText)}>{turn.timeLabel}</span>
                       {turn.isInterim ? <Badge tone="neutral">{turn.statusLabel}</Badge> : null}
                     </div>

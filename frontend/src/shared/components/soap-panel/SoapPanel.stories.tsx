@@ -54,13 +54,13 @@ const SAMPLE_SECTIONS: readonly SoapPanelSectionView[] = [
   {
     key: "A",
     codeLabel: "A",
-    title: "A 評価",
-    emptyLabel: "評価項目はまだありません。",
+    title: "A アセスメント",
+    emptyLabel: "アセスメント項目はまだありません。",
     items: [
       {
         itemId: "soap-A-1",
         text: "嚥下痛を伴う上気道症状で、脱水予防と経過観察が必要と考えられる。",
-        badges: [{ label: "発言由来の評価", tone: "success" }],
+        badges: [{ label: "発言由来のアセスメント", tone: "success" }],
         evidences: [
           {
             streamId: "s1",
@@ -72,8 +72,8 @@ const SAMPLE_SECTIONS: readonly SoapPanelSectionView[] = [
       },
       {
         itemId: "soap-A-2",
-        text: "Pからの評価案（要確認）: 毎食後服用・水分摂取・3日後再受診を計画",
-        badges: [{ label: "Pからの推測案・要確認", tone: "neutral" }],
+        text: "S/O・Pからのアセスメント案（要確認）: 咽頭痛と発熱（37.8℃）を踏まえ、悪化予防と安全確認のため毎食後服用・水分摂取・3日後再受診を計画したと判断",
+        badges: [{ label: "S/O・Pからの推測案・要確認", tone: "neutral" }],
         evidences: [
           {
             streamId: "s1",

@@ -159,6 +159,16 @@ describe("RealtimeTranscriptionContainer", () => {
     expect(screen.getByText("お薬を飲む時間帯を確認しましょう。")).toBeInTheDocument();
     expect(screen.getByText("朝から軽い胃痛がある")).toBeInTheDocument();
 
+    // 上部マイク選択欄もチャット吹き出しも「患者（左）／薬剤師（右）」の順で並び、マイク番号表記がないこと
+    const micTexts = Array.from(container.querySelectorAll("span"))
+      .map((el) => el.textContent)
+      .filter((text) => text === "患者 (S)" || text === "薬剤師 (P/A)");
+    expect(micTexts).toEqual(["患者 (S)", "薬剤師 (P/A)"]);
+    expect(screen.queryByText(/マイク\s*[12]/)).not.toBeInTheDocument();
+    const turnItems = container.querySelectorAll("li[data-align]");
+    expect(turnItems[0]).toHaveAttribute("data-align", "right");
+    expect(turnItems[1]).toHaveAttribute("data-align", "left");
+
     fireEvent.click(screen.getByRole("tab", { name: /SOAP/ }));
     expect(screen.getByRole("tab", { name: /SOAP/ })).toHaveAttribute("aria-selected", "true");
 

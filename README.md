@@ -42,12 +42,21 @@ Backend の `CORS_ORIGINS` は、許可する Origin をカンマ区切りで指
   - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: Supabase Publishable Key（従来の anon key。Service Role / Secret Key は設定しない）
   - `APP_PUBLIC_URL`（任意）: OAuth コールバック後のリダイレクト先 Origin を固定するための信頼済み公開 URL（ローカル開発時は省略可、例: `http://localhost:3000`）
 - **Backend（`.env` 等）**:
-  - `DEEPGRAM_KEY`: Deepgram API キー（Backend のみに置き、ブラウザへは公開しない）
+  - `DEEPGRAM_KEY` / `DEEPGRAM_MODEL`: Deepgram API キーとモデル（既定 `nova-3`。Backend のみに置き、ブラウザへは公開しない）
+  - `STT_MONO_MIX_ENABLED` / `STT_VAD_ENABLED`: 既定は両方 `false`。精度優先で2ch PCMを無音・小声を含めてそのまま送り、Deepgram の `multichannel=true` で独立認識する。ch0=薬剤師、ch1=患者を維持する。既存環境で `true` にしている場合は両方 `false` に変更してBackendを再起動する
+  - `STT_VAD_RMS_THRESHOLD` / `STT_VAD_PREROLL_MS` / `STT_VAD_HANGOVER_MS` / `STT_KEEPALIVE_INTERVAL_SECONDS`: 明示的にモノラル合成・VADを有効化して比較実験する場合の設定。通常の精度優先構成では音声カットに使用しない
   - `SUPABASE_URL`: JWT / JWKS 検証対象の Supabase プロジェクト URL（ES256 / RS256 の非対称鍵を前提）
   - `SUPABASE_JWT_AUDIENCE`: 既定値 `authenticated`
   - `CORS_ORIGINS` / `WS_ALLOWED_ORIGINS`: 許可するフロントエンド Origin（カンマ区切り）
   - `TRANSCRIPTION_MAX_SESSION_SECONDS`: 1 回の文字起こし WebSocket セッション上限（既定 `240` 秒。Vercel 実行時間上限より短く設定）
-  - `SOAP_LLM_PROVIDER` / `SOAP_LLM_MODEL` / `SOAP_LLM_TIMEOUT_SECONDS`: リアルタイム SOAP 生成に使う LLM プロバイダー設定（既定は外部通信なしの `fake`。`langchain` 等の実プロバイダー連携は別途依存追加の上で指定）
+  - `SOAP_LLM_PROVIDER` / `SOAP_LLM_MODEL` / `SOAP_LLM_FINALIZE_MODEL` / `SOAP_LLM_THINKING_BUDGET` / `SOAP_LLM_MAX_TOKENS` / `SOAP_LLM_TIMEOUT_SECONDS` / `GOOGLE_API_KEY`: リアルタイム SOAP 生成用 LLM 設定（既定は `google_genai`、既定モデル `gemini-3.5-flash-lite`、思考トークン予算既定 `0`。無効化時は `off` または `none` を指定）
+  - `SOAP_MIN_INTERVAL_SECONDS` / `SOAP_MAX_BATCH_WAIT_SECONDS`: リアルタイム SOAP 抽出バッチ間隔（既定 `12.0` 秒）
+
+短い肯定・否定返答や挨拶も、確定発話として直近の会話文脈とともにLLMへ渡します。質問への回答か相槌かを文字列だけでは判定しません。回り込みの自動除外は、空白を除く同一文が8文字以上、両区間の重なりが長い側の80%以上、他chのRMSが自chの3倍超という保守的な初期条件に限定し、除外候補は内部に保持します。これらの閾値は実録音で精度検証済みの値ではありません。
+
+実機では、各マイクを担当話者の口元に近づけ、入力ゲインを調整して音割れと回り込みを抑えます。同じ2ch録音で、話者の誤割り当て、発話の欠落・重複、薬剤名・数値・否定表現の誤りを分けて評価してください。
+
+2マイク時はブラウザの自動ゲイン調整を無効にするよう要求し、遠い声が自動増幅されてマイク間の音量差が縮むのを抑えます。ただし、ブラウザ・デバイス側で要求が反映されるかは実機確認が必要です。2ch独立認識自体は話者分離ではなく、両マイクが拾った声は両chで認識されます。同じ場所から1人で2役を話しても役割は判定できません。カウンターでの評価は2人が各自の位置で行い、1人で試す場合は役ごとに話す位置を変えてください。
 
 ## 構成
 

@@ -1,10 +1,10 @@
-import array
 import math
 import re
 from collections import deque
 from dataclasses import dataclass
 
 from app.schemas.soap import SpeakerRole, TranscriptSegmentModel, TranscriptStatus
+from app.services.audio_vad_service import compute_pcm16_channel_rms
 
 SPEAKER_ROLE_BY_CHANNEL: dict[int, tuple[SpeakerRole, str]] = {
     0: ("pharmacist", "薬剤師"),
@@ -17,38 +17,6 @@ class _AudioChunk:
     start: float
     end: float
     levels: tuple[float, float]
-
-
-def compute_pcm16_channel_rms(pcm16_bytes: bytes, *, channels: int) -> tuple[float, float]:
-    """16bit リトルエンディアン PCM からチャンネルごとの正規化 RMS (0.0〜1.0) を算出する。"""
-    if channels not in {1, 2} or len(pcm16_bytes) < 2:
-        return (0.0, 0.0)
-
-    usable_len = len(pcm16_bytes) - (len(pcm16_bytes) % (2 * channels))
-    if usable_len <= 0:
-        return (0.0, 0.0)
-
-    samples = array.array("h")
-    samples.frombytes(pcm16_bytes[:usable_len])
-    frame_count = len(samples) // channels
-    if frame_count <= 0:
-        return (0.0, 0.0)
-
-    if channels == 1:
-        sum_sq = sum(float(sample) * float(sample) for sample in samples)
-        rms0 = min(1.0, math.sqrt(sum_sq / frame_count) / 32768.0)
-        return (rms0, 0.0)
-
-    sum_sq_0 = 0.0
-    sum_sq_1 = 0.0
-    for idx in range(0, len(samples), 2):
-        left = float(samples[idx])
-        right = float(samples[idx + 1])
-        sum_sq_0 += left * left
-        sum_sq_1 += right * right
-    rms0 = min(1.0, math.sqrt(sum_sq_0 / frame_count) / 32768.0)
-    rms1 = min(1.0, math.sqrt(sum_sq_1 / frame_count) / 32768.0)
-    return (rms0, rms1)
 
 
 class BackendAudioLevelHistory:
@@ -134,9 +102,9 @@ def is_crosstalk_duplicate(
     start_sec: float,
     end_sec: float,
     recent_channel_levels: tuple[float, float],
-    dominance_ratio: float = 1.35,
+    dominance_ratio: float = 3.0,
 ) -> bool:
-    """2マイク環境での回り込み二重確定を音量差と時刻重複から判定する。"""
+    """長い同一文・強い時刻重複・大きな音量差が揃う回り込み候補のみ除外する。"""
     if channel_index not in {0, 1}:
         return False
 
@@ -148,7 +116,8 @@ def is_crosstalk_duplicate(
         return False
 
     normalized = re.sub(r"\s+", "", text)
-    if not normalized:
+    # 短い返答は両者が同時に発することもあるため、音量差が大きくても保持する
+    if len(normalized) < 8:
         return False
 
     for segment in segments:
@@ -158,7 +127,9 @@ def is_crosstalk_duplicate(
             or segment.status == "interim"
         ):
             continue
-        if min(segment.end_sec, end_sec) <= max(segment.start_sec, start_sec):
+        overlap = min(segment.end_sec, end_sec) - max(segment.start_sec, start_sec)
+        longest_duration = max(segment.end_sec - segment.start_sec, end_sec - start_sec)
+        if longest_duration <= 0 or overlap < longest_duration * 0.8:
             continue
         if re.sub(r"\s+", "", segment.text) == normalized:
             return True
@@ -224,6 +195,7 @@ class ConversationTranscriptState:
         event: DeepgramTranscriptInput,
         *,
         stream_id: str | None = None,
+        single_stream_diarized: bool = False,
     ) -> TranscriptApplyOutcome:
         """Deepgram の認識結果を正規化し、発話状態の更新結果（と回り込み除外）を返す。"""
         text = event.text.strip()
@@ -233,10 +205,11 @@ class ConversationTranscriptState:
         target_stream = stream_id or self._current_stream_id or self.start_stream()
         channel: int = 1 if event.channel_index == 1 else 0
         speaker_role, speaker_label = SPEAKER_ROLE_BY_CHANNEL[channel]
-        interim_key = (target_stream, channel)
+        # 1ch ミックスモードでは同一ストリーム内で話者が切り替わってもゴースト interim を残さない
+        interim_key = (target_stream, 0 if single_stream_diarized else channel)
         active_interim_id = self._active_interim_ids.get(interim_key)
 
-        if event.is_final:
+        if event.is_final and not single_stream_diarized:
             levels = self._audio_history.levels_for(event.start_sec, event.end_sec)
             if is_crosstalk_duplicate(
                 self._segments,

@@ -3,7 +3,7 @@ import type { SoapItem, SoapNote, SoapSectionKey } from "./types";
 const SECTION_HEADINGS: Record<SoapSectionKey, string> = {
   S: "S (主観的情報)",
   O: "O (客観的情報)",
-  A: "A (評価)",
+  A: "A (アセスメント)",
   P: "P (計画)",
 };
 
@@ -13,7 +13,7 @@ function formatSoapItemLine(sectionKey: SoapSectionKey, item: SoapItem): string 
     tags.push("患者申告/未確認");
   }
   if (sectionKey === "A" && item.origin === "plan_inference") {
-    tags.push("Pからの推測案・要確認");
+    tags.push("S/O・Pからの推測案・要確認");
   }
   if (item.stale_after_plan_update) {
     tags.push("P更新後は未反映");

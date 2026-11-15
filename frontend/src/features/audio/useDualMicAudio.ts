@@ -114,7 +114,7 @@ export function useDualMicAudio(options?: UseDualMicAudioOptions) {
   const selectMic1DeviceId = useCallback(
     (deviceId: string) => {
       if (mode === "dual" && deviceId && deviceId === mic2DeviceId) {
-        setError("マイク 1（薬剤師）とマイク 2（患者）に同じデバイスは指定できません。");
+        setError("患者用と薬剤師用に同じデバイスは指定できません。");
         return;
       }
       setError(null);
@@ -126,7 +126,7 @@ export function useDualMicAudio(options?: UseDualMicAudioOptions) {
   const selectMic2DeviceId = useCallback(
     (deviceId: string) => {
       if (mode === "dual" && deviceId && deviceId === mic1DeviceId) {
-        setError("マイク 1（薬剤師）とマイク 2（患者）に同じデバイスは指定できません。");
+        setError("患者用と薬剤師用に同じデバイスは指定できません。");
         return;
       }
       setError(null);
@@ -155,7 +155,7 @@ export function useDualMicAudio(options?: UseDualMicAudioOptions) {
     async (selection?: CaptureDevices) => {
       if (captureRunRef.current) return false;
       if (mode === "dual" && mic1DeviceId && mic2DeviceId && mic1DeviceId === mic2DeviceId) {
-        setError("マイク 1（薬剤師）とマイク 2（患者）に同じデバイスは指定できません。");
+        setError("患者用と薬剤師用に同じデバイスは指定できません。");
         return false;
       }
       const controller = new AbortController();

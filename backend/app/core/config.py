@@ -83,6 +83,39 @@ def _parse_non_negative_int(raw: str | None, default: int) -> int:
     return value if value >= 0 else default
 
 
+def _parse_optional_non_negative_int(raw: str | None, default: int | None) -> int | None:
+    if raw is None:
+        return default
+    cleaned = raw.strip().lower()
+    if not cleaned:
+        return default
+    if cleaned in {"none", "null", "auto", "-1"}:
+        return None
+    try:
+        value = int(cleaned)
+    except ValueError:
+        return default
+    return value if value >= 0 else None
+
+
+def _parse_bool(raw: str | None, default: bool) -> bool:
+    if raw is None or not raw.strip():
+        return default
+    cleaned = raw.strip().lower()
+    if cleaned in {"1", "true", "yes", "on"}:
+        return True
+    if cleaned in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _normalize_llm_provider(raw: str | None) -> str:
+    cleaned = (raw or "google_genai").strip().lower() or "google_genai"
+    if cleaned in {"gemini", "google-genai", "google_genai"}:
+        return "google_genai"
+    return cleaned
+
+
 _load_dotenv_files()
 
 
@@ -106,7 +139,36 @@ class Settings:
             "/"
         )
     )
+    deepgram_model: str = field(
+        default_factory=lambda: os.getenv("DEEPGRAM_MODEL", "nova-3").strip() or "nova-3"
+    )
     deepgram_token_ttl_seconds: int = 30
+    stt_mono_mix_enabled: bool = field(
+        default_factory=lambda: _parse_bool(os.getenv("STT_MONO_MIX_ENABLED"), default=False)
+    )
+    stt_vad_enabled: bool = field(
+        default_factory=lambda: _parse_bool(os.getenv("STT_VAD_ENABLED"), default=False)
+    )
+    stt_vad_rms_threshold: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("STT_VAD_RMS_THRESHOLD"), default=0.008
+        )
+    )
+    stt_vad_preroll_ms: int = field(
+        default_factory=lambda: _parse_non_negative_int(
+            os.getenv("STT_VAD_PREROLL_MS"), default=300
+        )
+    )
+    stt_vad_hangover_ms: int = field(
+        default_factory=lambda: _parse_non_negative_int(
+            os.getenv("STT_VAD_HANGOVER_MS"), default=600
+        )
+    )
+    stt_keepalive_interval_seconds: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("STT_KEEPALIVE_INTERVAL_SECONDS"), default=4.0
+        )
+    )
     supabase_url: str = field(
         default_factory=lambda: os.getenv("SUPABASE_URL", "").strip().rstrip("/")
     )
@@ -126,9 +188,17 @@ class Settings:
         )
     )
     soap_llm_provider: str = field(
-        default_factory=lambda: os.getenv("SOAP_LLM_PROVIDER", "fake").strip().lower() or "fake"
+        default_factory=lambda: _normalize_llm_provider(os.getenv("SOAP_LLM_PROVIDER"))
     )
     soap_llm_model: str = field(default_factory=lambda: os.getenv("SOAP_LLM_MODEL", "").strip())
+    soap_llm_finalize_model: str = field(
+        default_factory=lambda: os.getenv("SOAP_LLM_FINALIZE_MODEL", "").strip()
+    )
+    soap_llm_thinking_budget: int | None = field(
+        default_factory=lambda: _parse_optional_non_negative_int(
+            os.getenv("SOAP_LLM_THINKING_BUDGET"), default=0
+        )
+    )
     soap_llm_timeout_seconds: float = field(
         default_factory=lambda: _parse_positive_float(
             os.getenv("SOAP_LLM_TIMEOUT_SECONDS"), default=15.0
@@ -140,7 +210,7 @@ class Settings:
         )
     )
     soap_llm_max_tokens: int = field(
-        default_factory=lambda: _parse_positive_int(os.getenv("SOAP_LLM_MAX_TOKENS"), default=1500)
+        default_factory=lambda: _parse_positive_int(os.getenv("SOAP_LLM_MAX_TOKENS"), default=2048)
     )
     soap_llm_max_input_chars: int = field(
         default_factory=lambda: _parse_positive_int(
@@ -152,12 +222,12 @@ class Settings:
     )
     soap_max_batch_wait_seconds: float = field(
         default_factory=lambda: _parse_positive_float(
-            os.getenv("SOAP_MAX_BATCH_WAIT_SECONDS"), default=2.0
+            os.getenv("SOAP_MAX_BATCH_WAIT_SECONDS"), default=12.0
         )
     )
     soap_min_interval_seconds: float = field(
         default_factory=lambda: _parse_positive_float(
-            os.getenv("SOAP_MIN_INTERVAL_SECONDS"), default=2.0
+            os.getenv("SOAP_MIN_INTERVAL_SECONDS"), default=12.0
         )
     )
     soap_stt_final_timeout_seconds: float = field(

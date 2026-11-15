@@ -4,7 +4,13 @@ test("トップページは公開維持され、保護された文字起こし�
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByRole("link", { name: /文字起こし画面へ/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /文字起こしを始める/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: "仕組みを見る" })).toBeVisible();
+
+  await page.goto("/mechanism");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    "リアルタイム文字起こし・SOAP 自動生成の仕組み",
+  );
 
   await page.goto("/transcription");
   await expect(page).toHaveURL(/\/login\?next=%2Ftranscription/);

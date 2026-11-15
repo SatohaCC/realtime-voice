@@ -164,7 +164,7 @@ export function useRealtimeTranscription({
     if (runRef.current) return;
     if (audio.hasDuplicateDevices) {
       setTranscriptionError(
-        "マイク 1（薬剤師）とマイク 2（患者）に同じデバイスは指定できません。別のマイクを選ぶか「1マイク」へ切り替えてください。",
+        "患者用と薬剤師用に同じデバイスは指定できません。別のマイクを選ぶか「1マイク」へ切り替えてください。",
       );
       return;
     }

@@ -45,8 +45,7 @@ export function AppHeader({ initialUser = null }: AppHeaderProps) {
   const navItems: HeaderNavItem[] = [
     { href: "/", label: "ホーム", isCurrent: pathname === "/" },
     { href: "/transcription", label: "文字起こし", isCurrent: pathname === "/transcription" },
-    { href: "/#connection", label: "接続状態" },
-    { href: "/#colors", label: "カラー" },
+    { href: "/mechanism", label: "仕組み", isCurrent: pathname === "/mechanism" },
   ];
 
   const actions = currentUser ? (
