@@ -12,6 +12,7 @@ from app.clients.deepgram_client import (
     DeepgramStreamProtocol,
 )
 from app.clients.soap_llm_client import SoapLlmClientProtocol
+from app.clients.speaker_embedding_client import SpeakerEmbeddingClientProtocol
 from app.clients.supabase_auth_client import AuthClientError, AuthClientProtocol
 from app.core.config import settings
 from app.schemas.auth import WsAuthOkEvent
@@ -110,6 +111,8 @@ async def relay_deepgram_stream(
     now_fn: Callable[[], float] | None = None,
     llm_client: SoapLlmClientProtocol | None = None,
     use_default_llm: bool = True,
+    speaker_client: SpeakerEmbeddingClientProtocol | None = None,
+    use_default_speaker_client: bool = True,
     conversation_registry: ConversationSessionRegistry | None = None,
     soap_timing: SoapTimingOptions | None = None,
 ) -> None:
@@ -211,6 +214,8 @@ async def relay_deepgram_stream(
                     on_close=on_close,
                     llm_client=llm_client,
                     use_default_llm=use_default_llm,
+                    speaker_client=speaker_client,
+                    use_default_speaker_client=use_default_speaker_client,
                     registry=conversation_registry,
                     timing=soap_timing,
                     now_fn=get_now,

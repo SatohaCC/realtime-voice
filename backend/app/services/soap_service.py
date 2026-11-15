@@ -502,6 +502,109 @@ class SoapStateManager:
             rejected_operations=rejected,
         )
 
+    def reconcile_transcript_segments(
+        self,
+        segments_lookup: dict[tuple[str, str], TranscriptSegmentModel],
+    ) -> SoapApplyOutcome:
+        """後続の話者訂正・クロストーク削除に合わせて既反映 SOAP 項目を再評価・自動撤回する。"""
+        working = self._note.model_copy(deep=True)
+        changed_ids: list[str] = []
+        retracted_ids: list[str] = []
+        dirty_sections: set[SoapSectionKey] = set()
+        applied = 0
+
+        for section_key in ("S", "O", "A", "P"):
+            section_key_typed: SoapSectionKey = section_key
+            section = self._section_of(working, section_key_typed)
+            kept_items: list[SoapItemModel] = []
+
+            for item in section.items:
+                if item.origin == "plan_inference" and not item.evidence:
+                    kept_items.append(item)
+                    continue
+
+                refreshed_evidence: list[SoapEvidenceModel] = []
+                evidence_changed = False
+                for ev in item.evidence:
+                    seg = segments_lookup.get((ev.stream_id, ev.segment_id))
+                    if (
+                        seg is None
+                        or seg.status == "interim"
+                        or not self._quote_matches(ev.quote, seg.text)
+                    ):
+                        evidence_changed = True
+                        continue
+                    if (
+                        seg.segment_revision != ev.segment_revision
+                        or seg.speaker_role != ev.speaker_role
+                    ):
+                        evidence_changed = True
+                    refreshed_evidence.append(
+                        SoapEvidenceModel(
+                            stream_id=seg.stream_id,
+                            segment_id=seg.segment_id,
+                            segment_revision=seg.segment_revision,
+                            quote=ev.quote,
+                            speaker_role=seg.speaker_role,
+                        )
+                    )
+
+                if not evidence_changed:
+                    kept_items.append(item)
+                    continue
+
+                dirty_sections.add(section_key_typed)
+                applied += 1
+                if not refreshed_evidence or not self._is_section_evidence_allowed(
+                    section_key_typed, refreshed_evidence
+                ):
+                    retracted_ids.append(item.item_id)
+                    continue
+
+                next_verification = self._resolve_verification_status(
+                    section_key_typed,
+                    item.verification_status,
+                    refreshed_evidence,
+                )
+                kept_items.append(
+                    item.model_copy(
+                        update={
+                            "item_revision": item.item_revision + 1,
+                            "evidence": refreshed_evidence,
+                            "verification_status": next_verification,
+                        }
+                    )
+                )
+                changed_ids.append(item.item_id)
+
+            section.items = kept_items
+
+        if applied > 0:
+            if "P" in dirty_sections and working.sections.A.items:
+                marked_a = False
+                for a_item in working.sections.A.items:
+                    if a_item.origin == "plan_inference" and not a_item.stale_after_plan_update:
+                        a_item.stale_after_plan_update = True
+                        a_item.item_revision += 1
+                        changed_ids.append(a_item.item_id)
+                        marked_a = True
+                if marked_a:
+                    dirty_sections.add("A")
+
+            for sec_key in dirty_sections:
+                sec = self._section_of(working, sec_key)
+                sec.revision += 1
+            working.revision += 1
+            self._note = working
+
+        return SoapApplyOutcome(
+            soap=self.note,
+            changed_item_ids=changed_ids,
+            retracted_item_ids=retracted_ids,
+            applied_operations=applied,
+            rejected_operations=0,
+        )
+
     def _mint_item_id(self, section: SoapSectionKey) -> str:
         seq = self._next_item_seq[section]
         self._next_item_seq[section] = seq + 1

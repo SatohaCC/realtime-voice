@@ -991,3 +991,109 @@ def test_extract_payload_includes_recent_context_and_trims_it_before_failing() -
         assert outcome.applied_operations == 2
 
     asyncio.run(_run())
+
+
+def test_unknown_speaker_blocked_and_reconcile_retracts_invalidated_soap_items() -> None:
+    from app.schemas.soap import TranscriptSegmentModel
+
+    conv = ConversationTranscriptState(conversation_id="conv-reconcile")
+    conv.start_stream("s1")
+    patient_seg = TranscriptSegmentModel(
+        stream_id="s1",
+        segment_id="seg-1",
+        segment_revision=1,
+        transcript_revision=1,
+        channel_index=1,
+        speaker_role="patient",
+        speaker_label="患者",
+        text="昨日から胃が痛いです",
+        status="final",
+        start_sec=0.2,
+        end_sec=1.6,
+        confidence=0.95,
+    )
+    unknown_seg = TranscriptSegmentModel(
+        stream_id="s1",
+        segment_id="seg-2",
+        segment_revision=1,
+        transcript_revision=2,
+        channel_index=0,
+        speaker_role="unknown",
+        speaker_label="話者不明",
+        text="別の薬局でもらいました",
+        status="final",
+        start_sec=2.0,
+        end_sec=3.0,
+        confidence=0.9,
+    )
+    lookup = {
+        ("s1", "seg-1"): patient_seg,
+        ("s1", "seg-2"): unknown_seg,
+    }
+    manager = SoapStateManager(conversation_id="conv-reconcile")
+
+    # 1. unknown のみの根拠で S へ追加しようとしても拒否される
+    rejected = manager.apply_extract_spoa_raw(
+        raw_result={
+            "operations": [
+                {
+                    "action": "add",
+                    "section": "S",
+                    "text": "別の薬局での処方あり",
+                    "evidence_refs": [
+                        {
+                            "stream_id": "s1",
+                            "segment_id": "seg-2",
+                            "segment_revision": 1,
+                            "quote": "別の薬局でもらいました",
+                        }
+                    ],
+                }
+            ]
+        },
+        segments_lookup=lookup,
+        processed_transcript_revision=2,
+    )
+    assert rejected.rejected_operations == 1
+    assert rejected.soap.sections.S.items == []
+
+    # 2. patient 根拠で S を生成したあと、後から話者が pharmacist に訂正されると自動撤回される
+    added = manager.apply_extract_spoa_raw(
+        raw_result={
+            "operations": [
+                {
+                    "action": "add",
+                    "section": "S",
+                    "text": "昨日からの胃痛を訴え",
+                    "evidence_refs": [
+                        {
+                            "stream_id": "s1",
+                            "segment_id": "seg-1",
+                            "segment_revision": 1,
+                            "quote": "昨日から胃が痛いです",
+                        }
+                    ],
+                }
+            ]
+        },
+        segments_lookup=lookup,
+        processed_transcript_revision=2,
+    )
+    assert len(added.soap.sections.S.items) == 1
+    s_item_id = added.soap.sections.S.items[0].item_id
+
+    corrected_lookup = {
+        ("s1", "seg-1"): patient_seg.model_copy(
+            update={
+                "segment_revision": 2,
+                "speaker_role": "pharmacist",
+                "speaker_label": "薬剤師",
+                "status": "refined",
+            }
+        ),
+        ("s1", "seg-2"): unknown_seg,
+    }
+    reconciled = manager.reconcile_transcript_segments(corrected_lookup)
+    assert s_item_id in reconciled.retracted_item_ids
+    assert reconciled.soap.sections.S.items == []
+    assert reconciled.soap.revision > added.soap.revision

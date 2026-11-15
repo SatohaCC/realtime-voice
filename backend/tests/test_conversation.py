@@ -236,3 +236,96 @@ def test_ambiguous_crosstalk_preserves_short_replies_and_overlapping_speech(
     )
     assert not reply.suppressed_crosstalk
     assert [seg.speaker_role for seg in state.finalized_segments] == ["pharmacist", "patient"]
+
+
+def test_pcm_ring_buffer_slices_and_clears() -> None:
+    from app.services.conversation_service import BackendAudioPcmRingBuffer
+
+    ring = BackendAudioPcmRingBuffer(max_history_seconds=5.0)
+    chunk_1s = _make_stereo_pcm16(left_amp=4000, right_amp=200, samples_per_channel=16000)
+    ring.append_pcm16(chunk_1s, channels=2, sample_rate=16000)
+    ring.append_pcm16(chunk_1s, channels=2, sample_rate=16000)
+
+    sliced = ring.slice_pcm16(0.5, 1.5)
+    assert sliced is not None
+    pcm_bytes, channels, sr = sliced
+    assert channels == 2
+    assert sr == 16000
+    assert len(pcm_bytes) == 16000 * 2 * 2
+
+    ring.clear()
+    assert ring.slice_pcm16(0.5, 1.5) is None
+
+
+def test_voiceprint_crosstalk_integration_and_delayed_short_refinement() -> None:
+    from app.services.speaker_service import normalize_embedding
+
+    pharm_vec = normalize_embedding([1.0] + [0.0] * 31)
+    patient_vec = normalize_embedding([0.0, 1.0] + [0.0] * 30)
+    assert pharm_vec is not None
+    assert patient_vec is not None
+
+    state = ConversationTranscriptState(conversation_id="conv-voiceprint")
+    state.start_stream("s1")
+    ok, _ = state.set_pharmacist_profile(
+        model_id="3dspeaker_campplus_zh_en_16k", embedding=pharm_vec
+    )
+    assert ok is True
+
+    # 3.0秒のステレオ音声: ch0=大, ch1=小（回り込み）
+    state.append_pcm16(
+        _make_stereo_pcm16(left_amp=5000, right_amp=1500, samples_per_channel=48000),
+        channels=2,
+        sample_rate=16000,
+    )
+
+    # 1. ch0 で薬剤師が話す
+    out1 = state.apply_deepgram_event(
+        DeepgramTranscriptInput(0, "お薬の飲み方はお変わりないですか", True, True, 0.0, 1.8, 0.95),
+        segment_embedding=pharm_vec,
+    )
+    assert out1.segment is not None
+    assert out1.segment.speaker_role == "pharmacist"
+
+    # 2. ch1 に語尾違い・境界ズレの回り込みが入っても同一話者声紋＋音量劣位で統合除外する
+    out_bleed = state.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "お薬の飲み方はお変わりありませんか", True, True, 0.1, 1.7, 0.8),
+        segment_embedding=pharm_vec,
+    )
+    assert out_bleed.suppressed_crosstalk is True
+    assert len(state.finalized_segments) == 1
+
+    # 3. 直前に短い unknown が残っても、直後の患者高信頼発話で refined 再判定される
+    state_ref = ConversationTranscriptState(conversation_id="conv-refine")
+    state_ref.start_stream("s1")
+    assert state_ref.set_pharmacist_profile(
+        model_id="3dspeaker_campplus_zh_en_16k", embedding=pharm_vec
+    )[0]
+    # 前半0.4秒は ch0/ch1 拮抗（unknown になりやすい短発話）、後半2秒は ch1 優位（患者確定）
+    state_ref.append_pcm16(
+        _make_stereo_pcm16(left_amp=2000, right_amp=2200, samples_per_channel=16000),
+        channels=2,
+        sample_rate=16000,
+    )
+    state_ref.append_pcm16(
+        _make_stereo_pcm16(left_amp=300, right_amp=4500, samples_per_channel=40000),
+        channels=2,
+        sample_rate=16000,
+    )
+    short_out = state_ref.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "はい", True, True, 0.1, 0.4, 0.9),
+        segment_embedding=None,
+    )
+    assert short_out.segment is not None
+    assert short_out.segment.speaker_role == "unknown"
+
+    anchor_out = state_ref.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "毎朝しっかり飲めています", True, True, 1.1, 2.8, 0.95),
+        segment_embedding=patient_vec,
+    )
+    assert anchor_out.segment is not None
+    assert anchor_out.segment.speaker_role == "patient"
+    assert len(anchor_out.refined_segments) == 1
+    assert anchor_out.refined_segments[0].segment_id == short_out.segment.segment_id
+    assert anchor_out.refined_segments[0].speaker_role == "patient"
+    assert anchor_out.refined_segments[0].status == "refined"

@@ -8,6 +8,8 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
+from pydantic import ValidationError
+
 from app.clients.deepgram_client import (
     DeepgramClientError,
     DeepgramStreamProtocol,
@@ -16,6 +18,11 @@ from app.clients.soap_llm_client import (
     SoapLlmClientError,
     SoapLlmClientProtocol,
     get_default_soap_llm_client,
+)
+from app.clients.speaker_embedding_client import (
+    SpeakerEmbeddingClientError,
+    SpeakerEmbeddingClientProtocol,
+    get_default_speaker_embedding_client,
 )
 from app.core.config import settings
 from app.schemas.soap import (
@@ -26,6 +33,7 @@ from app.schemas.soap import (
     SoapUpdatedEvent,
     TranscriptUpdatedEvent,
 )
+from app.schemas.speaker import SpeakerProfileAckEvent, SpeakerProfileFrame
 from app.schemas.transcription import TranscriptionErrorEvent, TranscriptionStreamConfig
 from app.services.audio_vad_service import AudioActivityGate, AudioGateConfig
 from app.services.conversation_service import (
@@ -147,7 +155,8 @@ class ConversationSessionRegistry:
         )
         self._records[key] = record
         while len(self._records) > self._max_entries:
-            self._records.popitem(last=False)
+            _, evicted = self._records.popitem(last=False)
+            evicted.transcript_state.clear_speaker_memory()
         return record
 
     def _evict_expired(self, now: float) -> None:
@@ -157,7 +166,9 @@ class ConversationSessionRegistry:
             if now - record.last_touched_monotonic > self._ttl_seconds
         ]
         for key in expired_keys:
-            self._records.pop(key, None)
+            evicted = self._records.pop(key, None)
+            if evicted is not None:
+                evicted.transcript_state.clear_speaker_memory()
 
 
 _DEFAULT_REGISTRY = ConversationSessionRegistry()
@@ -252,6 +263,7 @@ class _SoapSessionCoordinator:
         timing: SoapTimingOptions,
         audio_gate: AudioActivityGate | None = None,
         mono_mix: bool = False,
+        speaker_client: SpeakerEmbeddingClientProtocol | None = None,
     ) -> None:
         self._record = record
         self._stream_id = stream_id
@@ -261,6 +273,7 @@ class _SoapSessionCoordinator:
         self._timing = timing
         self._audio_gate = audio_gate
         self._mono_mix = mono_mix
+        self._speaker_client = speaker_client
         self._wakeup = asyncio.Event()
         self._pending_since: float | None = None
         self._has_speech_final_trigger = False
@@ -327,12 +340,36 @@ class _SoapSessionCoordinator:
         )
         self._queue.enqueue(event.model_dump_json(), priority="status")
 
-    def handle_deepgram_message(self, raw_text: str) -> None:
+    def handle_speaker_profile_message(self, raw_payload: dict[str, object]) -> None:
+        """クライアントから届いた端末ローカル薬剤師声紋を会話の一時メモリへ反映する。"""
         if not self.is_current():
             return
+        try:
+            frame = SpeakerProfileFrame.model_validate(raw_payload)
+        except ValidationError:
+            ack = SpeakerProfileAckEvent(
+                accepted=False,
+                model_id=str(raw_payload.get("model_id") or ""),
+                reason="声紋フレームの形式が不正です。",
+            )
+            self._queue.enqueue(ack.model_dump_json(), priority="status")
+            return
+
+        accepted, reason = self._record.transcript_state.set_pharmacist_profile(
+            model_id=frame.model_id,
+            embedding=frame.embedding,
+        )
+        ack = SpeakerProfileAckEvent(
+            accepted=accepted,
+            model_id=frame.model_id,
+            reason=reason,
+        )
+        self._queue.enqueue(ack.model_dump_json(), priority="status")
+
+    def _parse_and_resolve_gate(self, raw_text: str) -> DeepgramTranscriptInput | None:
         parsed = _parse_deepgram_transcript_input(raw_text)
         if parsed is None:
-            return
+            return None
         if self._audio_gate is not None:
             resolved = self._audio_gate.resolve_stt_interval(parsed.start_sec, parsed.end_sec)
             if resolved is not None:
@@ -341,7 +378,7 @@ class _SoapSessionCoordinator:
                     if (self._mono_mix and resolved.dominant_channel is not None)
                     else parsed.channel_index
                 )
-                parsed = DeepgramTranscriptInput(
+                return DeepgramTranscriptInput(
                     channel_index=next_channel,
                     text=parsed.text,
                     is_final=parsed.is_final,
@@ -350,33 +387,129 @@ class _SoapSessionCoordinator:
                     end_sec=resolved.real_end_sec,
                     confidence=parsed.confidence,
                 )
+        return parsed
+
+    def _extract_embedding_for_event(self, parsed: DeepgramTranscriptInput) -> list[float] | None:
+        if self._speaker_client is None or self._mono_mix:
+            return None
+        if not self._record.transcript_state.needs_speaker_embedding(parsed):
+            return None
+        sliced = self._record.transcript_state.slice_pcm16(parsed.start_sec, parsed.end_sec)
+        if sliced is None:
+            return None
+        pcm_bytes, channels, sample_rate = sliced
+        channel_idx = 1 if parsed.channel_index == 1 and channels == 2 else 0
+        try:
+            return self._speaker_client.extract_embedding_from_pcm16(
+                pcm_bytes,
+                sample_rate=sample_rate,
+                channels=channels,
+                channel_index=channel_idx,
+            )
+        except SpeakerEmbeddingClientError:
+            return None
+
+    async def handle_deepgram_message_async(self, raw_text: str) -> None:
+        """イベントループを塞がずに話者埋め込みを抽出し、Deepgram メッセージを反映する。"""
+        if not self.is_current():
+            return
+        parsed = self._parse_and_resolve_gate(raw_text)
+        if parsed is None:
+            return
+        precomputed: list[float] | None = None
+        if (
+            self._speaker_client is not None
+            and not self._mono_mix
+            and self._record.transcript_state.needs_speaker_embedding(parsed)
+        ):
+            precomputed = await asyncio.to_thread(self._extract_embedding_for_event, parsed)
+        self.handle_deepgram_message(
+            raw_text,
+            precomputed_embedding=precomputed,
+            resolved_input=parsed,
+        )
+
+    def _reconcile_soap_with_transcript(self) -> None:
+        """後からの話者訂正・重複統合で既反映 SOAP の根拠が無効化された場合に自動補正する。"""
+        current_lookup = {
+            (seg.stream_id, seg.segment_id): seg
+            for seg in self._record.transcript_state.finalized_segments
+        }
+        outcome = self._record.soap_manager.reconcile_transcript_segments(current_lookup)
+        if outcome.applied_operations > 0 or outcome.retracted_item_ids:
+            updated_event = SoapUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                soap=outcome.soap,
+                changed_item_ids=outcome.changed_item_ids,
+                retracted_item_ids=outcome.retracted_item_ids,
+            )
+            self._queue.enqueue(updated_event.model_dump_json(), priority="high")
+
+    def handle_deepgram_message(
+        self,
+        raw_text: str,
+        *,
+        precomputed_embedding: list[float] | None = None,
+        resolved_input: DeepgramTranscriptInput | None = None,
+    ) -> None:
+        if not self.is_current():
+            return
+        parsed = (
+            resolved_input if resolved_input is not None else self._parse_and_resolve_gate(raw_text)
+        )
+        if parsed is None:
+            return
         outcome = self._record.transcript_state.apply_deepgram_event(
             parsed,
             stream_id=self._stream_id,
             single_stream_diarized=self._mono_mix,
+            segment_embedding=precomputed_embedding,
         )
-        if outcome.segment is None:
-            return
+        if outcome.segment is not None:
+            event = TranscriptUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                segment=outcome.segment,
+                removed=outcome.removed,
+            )
+            priority: _QueuePriority = (
+                "interim"
+                if (outcome.segment.status == "interim" and not outcome.removed)
+                else "high"
+            )
+            self._queue.enqueue(event.model_dump_json(), priority=priority)
 
-        event = TranscriptUpdatedEvent(
-            protocol_version=self._timing.protocol_version,
-            conversation_id=self._record.conversation_id,
-            event_id=self._event_id(),
-            sequence=self._next_seq(),
-            segment=outcome.segment,
-            removed=outcome.removed,
-        )
-        priority: _QueuePriority = (
-            "interim" if (outcome.segment.status == "interim" and not outcome.removed) else "high"
-        )
-        self._queue.enqueue(event.model_dump_json(), priority=priority)
+        for refined_seg in outcome.refined_segments:
+            refined_event = TranscriptUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                segment=refined_seg,
+                removed=False,
+            )
+            self._queue.enqueue(refined_event.model_dump_json(), priority="high")
 
-        if outcome.is_new_final and self._llm_client is not None:
+        if outcome.refined_segments or (outcome.removed and outcome.suppressed_crosstalk):
+            self._reconcile_soap_with_transcript()
+
+        if (outcome.is_new_final or outcome.refined_segments) and self._llm_client is not None:
             now = time.monotonic()
             if self._pending_since is None:
                 self._pending_since = now
             if self._record.pending_from_transcript_revision is None:
-                self._record.pending_from_transcript_revision = outcome.segment.transcript_revision
+                latest_rev = (
+                    max(s.transcript_revision for s in outcome.refined_segments)
+                    if outcome.refined_segments
+                    else (outcome.segment.transcript_revision if outcome.segment is not None else 0)
+                )
+                if latest_rev > 0:
+                    self._record.pending_from_transcript_revision = latest_rev
             if parsed.speech_final:
                 self._has_speech_final_trigger = True
             self._record.has_unapplied_transcript = True
@@ -709,6 +842,8 @@ async def relay_soap_conversation_stream(
     now_fn: Callable[[], float] | None = None,
     mono_mix: bool | None = None,
     audio_gate: AudioActivityGate | None = None,
+    speaker_client: SpeakerEmbeddingClientProtocol | None = None,
+    use_default_speaker_client: bool = True,
 ) -> None:
     """会話状態・単一 writer・Deepgram 中継・非同期 SOAP 生成を統合して実行する。"""
     resolved_timing = timing or SoapTimingOptions.from_settings()
@@ -741,6 +876,15 @@ async def relay_soap_conversation_stream(
         if llm_client is not None
         else (get_default_soap_llm_client() if (use_default_llm and config.channels == 2) else None)
     )
+    effective_speaker_client = (
+        speaker_client
+        if speaker_client is not None
+        else (
+            get_default_speaker_embedding_client(require_available=False)
+            if (use_default_speaker_client and config.channels == 2 and not resolved_mono_mix)
+            else None
+        )
+    )
 
     record = resolved_registry.get_or_create(
         user_id=user_id,
@@ -763,6 +907,7 @@ async def relay_soap_conversation_stream(
         timing=resolved_timing,
         audio_gate=active_gate,
         mono_mix=resolved_mono_mix,
+        speaker_client=effective_speaker_client,
     )
 
     async def _send_error_and_close(
@@ -817,6 +962,9 @@ async def relay_soap_conversation_stream(
                 msg_type = control.get("type")
                 if msg_type == "Auth":
                     continue
+                if msg_type == "SpeakerProfile":
+                    coordinator.handle_speaker_profile_message(control)
+                    continue
                 if msg_type == "CloseStream":
                     await deepgram_ws.send(payload)
                     return True
@@ -833,7 +981,7 @@ async def relay_soap_conversation_stream(
             text = (
                 message.decode("utf-8", errors="ignore") if isinstance(message, bytes) else message
             )
-            coordinator.handle_deepgram_message(text)
+            await coordinator.handle_deepgram_message_async(text)
 
     writer_task = asyncio.create_task(queue.drain_to(client_ws.send_text))
     llm_task = asyncio.create_task(coordinator.llm_worker_loop())
@@ -972,6 +1120,7 @@ async def relay_soap_conversation_stream(
     finally:
         coordinator.request_stop_background_llm()
         queue.close()
+        record.transcript_state.clear_pcm_buffer()
         for task in (
             client_task,
             deepgram_task,

@@ -867,3 +867,102 @@ def test_short_replies_and_greetings_are_sent_to_llm() -> None:
         assert llm2.extract_calls == 1
 
     asyncio.run(_run())
+
+
+def test_ws_speaker_profile_not_forwarded_to_deepgram_and_verifies_bleed() -> None:
+    import array
+
+    from app.services.speaker_service import normalize_embedding
+
+    pharm_vec = normalize_embedding([1.0] + [0.0] * 31)
+    assert pharm_vec is not None
+
+    class _StubSpeakerClient:
+        model_id = "3dspeaker_campplus_zh_en_16k"
+        embedding_dim = 32
+
+        def __init__(self, vec: list[float]) -> None:
+            self.calls = 0
+            self._vec = vec
+
+        def extract_embedding_from_pcm16(
+            self,
+            pcm16_bytes: bytes,
+            *,
+            sample_rate: int = 16000,
+            channels: int = 1,
+            channel_index: int = 0,
+        ) -> list[float] | None:
+            self.calls += 1
+            return list(self._vec)
+
+    buf = array.array("h")
+    for _ in range(32000):  # 2秒・2ch
+        buf.append(4000)
+        buf.append(1500)
+    stereo_pcm = buf.tobytes()
+
+    async def _run() -> None:
+        ws = _StubClientWs(
+            [
+                json.dumps({"type": "Auth", "access_token": "valid-token"}),
+                json.dumps(
+                    {
+                        "type": "SpeakerProfile",
+                        "model_id": "3dspeaker_campplus_zh_en_16k",
+                        "embedding": pharm_vec,
+                    }
+                ),
+                stereo_pcm,
+                json.dumps({"type": "CloseStream"}),
+            ]
+        )
+        # 薬剤師の声が ch1（患者マイク側）に混入した場合を模擬
+        dg = _StubDeepgramClient(
+            [
+                _dg_result(
+                    channel=1,
+                    text="朝食後に1錠お飲みください",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.1,
+                    duration=1.5,
+                )
+            ]
+        )
+        llm = _CountingLlmClient()
+        spk = _StubSpeakerClient(pharm_vec)
+        registry = ConversationSessionRegistry()
+
+        await relay_deepgram_stream(
+            ws,
+            TranscriptionStreamConfig(channels=2, enable_soap=True, conversation_id="conv-spk-ws"),
+            client=dg,
+            auth_client=_StubAuthClient(),
+            llm_client=llm,
+            speaker_client=spk,
+            conversation_registry=registry,
+            soap_timing=_fast_timing(),
+            now_fn=lambda: 1_000_000.0,
+        )
+
+        # SpeakerProfile は Deepgram へ転送しない
+        assert not any(
+            isinstance(p, str) and "SpeakerProfile" in p for p in dg._stream.sent_payloads
+        )
+        events = ws.parsed_events()
+        acks = [ev for ev in events if ev.get("type") == "SpeakerProfileAck"]
+        assert len(acks) == 1
+        assert acks[0]["accepted"] is True
+
+        assert spk.calls >= 1
+        finals = [
+            ev
+            for ev in events
+            if ev.get("type") == "TranscriptUpdated" and ev["segment"]["status"] == "final"
+        ]
+        assert len(finals) == 1
+        # ch1 由来でも薬剤師声紋と一致したため pharmacist へ補正される
+        assert finals[0]["segment"]["speaker_role"] == "pharmacist"
+
+    asyncio.run(_run())
