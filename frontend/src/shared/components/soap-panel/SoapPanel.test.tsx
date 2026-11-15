@@ -21,7 +21,7 @@ const TEST_SECTIONS: readonly SoapPanelSectionView[] = [
     ],
   },
   { key: "O", codeLabel: "O", title: "O 客観的情報", emptyLabel: "まだありません", items: [] },
-  { key: "A", codeLabel: "A", title: "A 評価", emptyLabel: "まだありません", items: [] },
+  { key: "A", codeLabel: "A", title: "A アセスメント", emptyLabel: "まだありません", items: [] },
   {
     key: "P",
     codeLabel: "P",
@@ -58,7 +58,7 @@ describe("SoapPanel", () => {
 
     expect(screen.getByRole("heading", { name: "S 主観的情報" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "O 客観的情報" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "A 評価" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "A アセスメント" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "P 計画" })).toBeInTheDocument();
     expect(screen.getAllByText("まだありません")).toHaveLength(2);
     expect(screen.queryByText(/異常なし|特記なし/)).not.toBeInTheDocument();

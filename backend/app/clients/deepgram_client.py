@@ -67,10 +67,12 @@ def build_deepgram_listen_url(
     language: str = "ja",
     sample_rate: int = 16000,
     endpointing_ms: int = 300,
+    model: str | None = None,
 ) -> str:
     """Deepgram Live Streaming WebSocket の接続先 URL を組み立てる。"""
+    resolved_model = (model or settings.deepgram_model).strip() or "nova-3"
     params: dict[str, str] = {
-        "model": "nova-3",
+        "model": resolved_model,
         "language": language,
         "encoding": "linear16",
         "sample_rate": str(sample_rate),

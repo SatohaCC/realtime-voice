@@ -27,6 +27,7 @@ from app.schemas.soap import (
     TranscriptUpdatedEvent,
 )
 from app.schemas.transcription import TranscriptionErrorEvent, TranscriptionStreamConfig
+from app.services.audio_vad_service import AudioActivityGate, AudioGateConfig
 from app.services.conversation_service import (
     ConversationTranscriptState,
     DeepgramTranscriptInput,
@@ -249,6 +250,8 @@ class _SoapSessionCoordinator:
         queue: BoundedWsOutboundQueue,
         llm_client: SoapLlmClientProtocol | None,
         timing: SoapTimingOptions,
+        audio_gate: AudioActivityGate | None = None,
+        mono_mix: bool = False,
     ) -> None:
         self._record = record
         self._stream_id = stream_id
@@ -256,6 +259,8 @@ class _SoapSessionCoordinator:
         self._queue = queue
         self._llm_client = llm_client
         self._timing = timing
+        self._audio_gate = audio_gate
+        self._mono_mix = mono_mix
         self._wakeup = asyncio.Event()
         self._pending_since: float | None = None
         self._has_speech_final_trigger = False
@@ -328,8 +333,27 @@ class _SoapSessionCoordinator:
         parsed = _parse_deepgram_transcript_input(raw_text)
         if parsed is None:
             return
+        if self._audio_gate is not None:
+            resolved = self._audio_gate.resolve_stt_interval(parsed.start_sec, parsed.end_sec)
+            if resolved is not None:
+                next_channel = (
+                    resolved.dominant_channel
+                    if (self._mono_mix and resolved.dominant_channel is not None)
+                    else parsed.channel_index
+                )
+                parsed = DeepgramTranscriptInput(
+                    channel_index=next_channel,
+                    text=parsed.text,
+                    is_final=parsed.is_final,
+                    speech_final=parsed.speech_final,
+                    start_sec=resolved.real_start_sec,
+                    end_sec=resolved.real_end_sec,
+                    confidence=parsed.confidence,
+                )
         outcome = self._record.transcript_state.apply_deepgram_event(
-            parsed, stream_id=self._stream_id
+            parsed,
+            stream_id=self._stream_id,
+            single_stream_diarized=self._mono_mix,
         )
         if outcome.segment is None:
             return
@@ -444,7 +468,7 @@ class _SoapSessionCoordinator:
                     self.enqueue_soap_status(
                         status="error",
                         has_unapplied_transcript=True,
-                        message="A 評価案の最終更新がタイムアウトしました。",
+                        message="A アセスメント案の最終更新がタイムアウトしました。",
                     )
 
         if not self.is_current():
@@ -683,11 +707,34 @@ async def relay_soap_conversation_stream(
     registry: ConversationSessionRegistry | None = None,
     timing: SoapTimingOptions | None = None,
     now_fn: Callable[[], float] | None = None,
+    mono_mix: bool | None = None,
+    audio_gate: AudioActivityGate | None = None,
 ) -> None:
     """会話状態・単一 writer・Deepgram 中継・非同期 SOAP 生成を統合して実行する。"""
     resolved_timing = timing or SoapTimingOptions.from_settings()
     resolved_registry = registry or get_default_conversation_registry()
     resolved_conv_id = (config.conversation_id or "").strip() or f"conv-{uuid.uuid4().hex[:12]}"
+    resolved_mono_mix = (
+        mono_mix
+        if mono_mix is not None
+        else (config.channels == 2 and settings.stt_mono_mix_enabled)
+    )
+    resolved_vad_enabled = config.channels == 2 and settings.stt_vad_enabled
+    active_gate: AudioActivityGate | None = audio_gate
+    if active_gate is None and (resolved_mono_mix or resolved_vad_enabled):
+        active_gate = AudioActivityGate(
+            AudioGateConfig(
+                sample_rate=config.sample_rate,
+                input_channels=config.channels,
+                output_channels=1 if resolved_mono_mix else config.channels,
+                vad_enabled=resolved_vad_enabled,
+                rms_threshold=settings.stt_vad_rms_threshold,
+                preroll_ms=settings.stt_vad_preroll_ms,
+                hangover_ms=settings.stt_vad_hangover_ms,
+            )
+        )
+    elif active_gate is not None:
+        active_gate.reset()
 
     effective_llm = (
         llm_client
@@ -714,6 +761,8 @@ async def relay_soap_conversation_stream(
         queue=queue,
         llm_client=effective_llm,
         timing=resolved_timing,
+        audio_gate=active_gate,
+        mono_mix=resolved_mono_mix,
     )
 
     async def _send_error_and_close(
@@ -726,6 +775,8 @@ async def relay_soap_conversation_stream(
             await on_close(close_code, reason)
 
     async def _forward_client() -> bool:
+        last_tx_monotonic = time.monotonic()
+        keepalive_interval = settings.stt_keepalive_interval_seconds
         while True:
             payload = await client_ws.receive_message()
             if not coordinator.is_current():
@@ -735,12 +786,27 @@ async def relay_soap_conversation_stream(
                     await deepgram_ws.send('{"type": "CloseStream"}')
                 return False
             if isinstance(payload, bytes):
-                record.transcript_state.append_pcm16(
-                    payload,
-                    channels=config.channels,
-                    sample_rate=config.sample_rate,
-                )
-                await deepgram_ws.send(payload)
+                if active_gate is not None:
+                    gate_result = active_gate.process_pcm16(payload)
+                    if not resolved_mono_mix:
+                        record.transcript_state.append_pcm16(
+                            payload,
+                            channels=config.channels,
+                            sample_rate=config.sample_rate,
+                        )
+                    if gate_result.emit_pcm16:
+                        await deepgram_ws.send(gate_result.emit_pcm16)
+                        last_tx_monotonic = time.monotonic()
+                    elif time.monotonic() - last_tx_monotonic >= keepalive_interval:
+                        await deepgram_ws.send('{"type": "KeepAlive"}')
+                        last_tx_monotonic = time.monotonic()
+                else:
+                    record.transcript_state.append_pcm16(
+                        payload,
+                        channels=config.channels,
+                        sample_rate=config.sample_rate,
+                    )
+                    await deepgram_ws.send(payload)
                 continue
             try:
                 control = json.loads(payload)

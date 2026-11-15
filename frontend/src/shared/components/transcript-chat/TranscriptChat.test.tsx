@@ -57,6 +57,9 @@ describe("TranscriptChat", () => {
 
     expect(screen.getByText("昨日から咳が出ます。")).toBeInTheDocument();
     expect(screen.getByText("熱は37.8℃です。")).toBeInTheDocument();
+    const turnItems = container.querySelectorAll("li[data-align]");
+    expect(turnItems[0]).toHaveAttribute("data-align", "right");
+    expect(turnItems[1]).toHaveAttribute("data-align", "left");
     const highlighted = container.querySelector('[data-segment-key="s1:seg-3"]');
     expect(highlighted).toHaveAttribute("data-highlighted", "true");
   });

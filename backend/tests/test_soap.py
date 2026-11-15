@@ -3,10 +3,11 @@ from typing import Any
 
 import pytest
 
-from app.clients.soap_llm_client import FakeSoapLlmClient, SoapLlmClientError
+from app.clients.soap_llm_client import SoapLlmClientError
 from app.schemas.soap import TranscriptSegmentModel
 from app.services.conversation_service import ConversationTranscriptState, DeepgramTranscriptInput
 from app.services.soap_service import SoapStateManager
+from tests.fake_soap_llm_client import FakeSoapLlmClient
 
 
 def _evidence(seg: TranscriptSegmentModel, quote: str | None = None) -> dict[str, Any]:
@@ -459,6 +460,12 @@ def test_fake_llm_flow_preserves_spoken_a_and_marks_stale_after_resume_p_update(
         assert len(extract_outcome.soap.sections.O.items) >= 1
         assert len(extract_outcome.soap.sections.A.items) >= 1
         assert len(extract_outcome.soap.sections.P.items) >= 1
+        finalize_payload = manager.build_finalize_a_payload()
+        assert "s_items" in finalize_payload
+        assert finalize_payload["o_items"] == [
+            item.model_dump(mode="json") for item in extract_outcome.soap.sections.O.items
+        ]
+        assert len(finalize_payload["plan_items"]) >= 1
         spoken_a_id = extract_outcome.soap.sections.A.items[0].item_id
 
         final_outcome = await manager.run_finalize_a_from_p(
@@ -515,6 +522,96 @@ def test_fake_llm_flow_preserves_spoken_a_and_marks_stale_after_resume_p_update(
         assert len(resumed_outcome.soap.sections.P.items[0].evidence) == 2
 
     asyncio.run(_run())
+
+
+def test_s_consolidates_multiple_patient_utterances_into_single_item() -> None:
+    conv = ConversationTranscriptState(conversation_id="conv-s-merge")
+    conv.start_stream("stream-1")
+    first_seg = conv.apply_deepgram_event(
+        DeepgramTranscriptInput(
+            channel_index=1,
+            text="昨日転んでしまい腰がかなり痛くて病院行きました。",
+            is_final=True,
+            speech_final=True,
+            start_sec=0.2,
+            end_sec=2.0,
+            confidence=0.95,
+        )
+    ).segment
+    second_seg = conv.apply_deepgram_event(
+        DeepgramTranscriptInput(
+            channel_index=1,
+            text="私朝ごはん食べないんですけど、朝薬どうしたらいいですか。",
+            is_final=True,
+            speech_final=True,
+            start_sec=2.5,
+            end_sec=4.5,
+            confidence=0.95,
+        )
+    ).segment
+    assert first_seg is not None and second_seg is not None
+    lookup = {(seg.stream_id, seg.segment_id): seg for seg in conv.segments}
+    manager = SoapStateManager(conversation_id=conv.conversation_id)
+
+    first = manager.apply_extract_spoa_raw(
+        raw_result={
+            "operations": [
+                {
+                    "action": "add",
+                    "section": "S",
+                    "text": "昨日転んで腰が痛く受診した。",
+                    "evidence_refs": [_evidence(first_seg)],
+                }
+            ]
+        },
+        segments_lookup=lookup,
+        processed_transcript_revision=1,
+    )
+    assert len(first.soap.sections.S.items) == 1
+    s_id = first.soap.sections.S.items[0].item_id
+
+    # モデルが誤って 2 件目の add を返しても既存 S 項目へ統合され、根拠も両方保持されること
+    merged = manager.apply_extract_spoa_raw(
+        raw_result={
+            "operations": [
+                {
+                    "action": "add",
+                    "section": "S",
+                    "text": "朝食を食べないため朝の薬の服用方法について相談がある。",
+                    "evidence_refs": [_evidence(second_seg)],
+                }
+            ]
+        },
+        segments_lookup=lookup,
+        processed_transcript_revision=conv.transcript_revision,
+    )
+    assert len(merged.soap.sections.S.items) == 1
+    s_item = merged.soap.sections.S.items[0]
+    assert s_item.item_id == s_id
+    assert s_item.item_revision == 2
+    assert "昨日転んで腰が痛く受診した。" in s_item.text
+    assert "朝食を食べないため朝の薬の服用方法について相談がある。" in s_item.text
+    assert len(s_item.evidence) == 2
+
+    # 通常の update でも既存 S 根拠が失われずに統合されること
+    updated = manager.apply_extract_spoa_raw(
+        raw_result={
+            "operations": [
+                {
+                    "action": "update",
+                    "section": "S",
+                    "item_id": s_id,
+                    "text": "昨日転倒し腰痛で受診。朝食抜きのため朝薬の服用方法を相談。",
+                    "evidence_refs": [_evidence(second_seg)],
+                }
+            ]
+        },
+        segments_lookup=lookup,
+        processed_transcript_revision=conv.transcript_revision,
+    )
+    assert len(updated.soap.sections.S.items) == 1
+    assert updated.soap.sections.S.items[0].item_revision == 3
+    assert len(updated.soap.sections.S.items[0].evidence) == 2
 
 
 def test_fake_llm_consolidates_batch_plan_utterances_and_updates_single_item() -> None:
@@ -659,3 +756,174 @@ def test_finalize_a_skips_when_plan_empty_and_discards_stale_concurrent_p_change
     )
     assert stale.stale_discarded is True
     assert len(stale.soap.sections.A.items) == 1
+
+
+def test_langchain_soap_llm_client_uses_pydantic_schemas_caches_and_handles_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from app.clients import soap_llm_client
+    from app.clients.soap_llm_client import LangChainSoapLlmClient, get_default_soap_llm_client
+    from app.schemas.soap import LlmExtractSpoaResult, LlmFinalizeAResult
+
+    init_calls: list[tuple[str, dict[str, Any]]] = []
+    schema_calls: list[type[Any]] = []
+    invoked_messages: list[Any] = []
+
+    class _FakeRunner:
+        def __init__(self, schema: type[Any]) -> None:
+            self._schema = schema
+
+        async def ainvoke(self, messages: Any) -> Any:
+            invoked_messages.append(messages)
+            if self._schema is LlmExtractSpoaResult:
+                return LlmExtractSpoaResult(operations=[])
+            return LlmFinalizeAResult(operations=[])
+
+    class _FakeModel:
+        def with_structured_output(self, schema: type[Any]) -> _FakeRunner:
+            schema_calls.append(schema)
+            return _FakeRunner(schema)
+
+    def _fake_init_chat_model(model: str, **kwargs: Any) -> _FakeModel:
+        init_calls.append((model, kwargs))
+        return _FakeModel()
+
+    monkeypatch.setattr(
+        soap_llm_client.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(init_chat_model=_fake_init_chat_model),
+    )
+
+    async def _run() -> None:
+        client = LangChainSoapLlmClient(
+            provider="gemini",
+            model="gemini-3.5-flash-lite",
+            finalize_model="gemini-3.8-flash",
+            thinking_budget=0,
+            _thinking_budget_set=True,
+        )
+        res1 = await client.extract_spoa({"new_segments": []})
+        res2 = await client.extract_spoa({"new_segments": []})
+        res3 = await client.finalize_a_from_p({"plan_items": []})
+
+        assert res1 == {"operations": []}
+        assert res2 == {"operations": []}
+        assert res3 == {"operations": []}
+        assert len(init_calls) == 2
+        assert init_calls[0][0] == "gemini-3.5-flash-lite"
+        assert init_calls[0][1]["model_provider"] == "google_genai"
+        assert "thinking_budget" not in init_calls[0][1]
+        assert init_calls[0][1]["thinking_config"] == {"thinking_level": "minimal"}
+        assert "temperature" not in init_calls[0][1]
+        assert init_calls[1][0] == "gemini-3.8-flash"
+        assert schema_calls == [LlmExtractSpoaResult, LlmFinalizeAResult]
+
+        # Gemini 2.5 Flash 系では thinking_budget=0 と temperature=0 を渡す
+        flash25_client = LangChainSoapLlmClient(
+            provider="google_genai",
+            model="gemini-2.5-flash-lite",
+            thinking_budget=0,
+            _thinking_budget_set=True,
+        )
+        await flash25_client.extract_spoa({"new_segments": []})
+        assert init_calls[-1][1]["thinking_budget"] == 0
+        assert init_calls[-1][1]["temperature"] == 0
+
+        # Pro モデル名では thinking_budget=0 / thinking_config を強制せず安全に初期化する
+        pro_client = LangChainSoapLlmClient(
+            provider="google_genai",
+            model="gemini-2.5-pro",
+            thinking_budget=0,
+            _thinking_budget_set=True,
+        )
+        await pro_client.extract_spoa({"new_segments": []})
+        assert "thinking_budget" not in init_calls[-1][1]
+        assert "thinking_config" not in init_calls[-1][1]
+
+    asyncio.run(_run())
+
+    from app.core.config import _normalize_llm_provider
+
+    assert _normalize_llm_provider(None) == "google_genai"
+    assert _normalize_llm_provider("") == "google_genai"
+
+    monkeypatch.setattr(
+        soap_llm_client,
+        "settings",
+        replace(soap_llm_client.settings, soap_llm_provider="gemini", soap_llm_model=""),
+    )
+    default_client = get_default_soap_llm_client()
+    assert isinstance(default_client, LangChainSoapLlmClient)
+
+    monkeypatch.setattr(
+        soap_llm_client,
+        "settings",
+        replace(soap_llm_client.settings, soap_llm_provider="off"),
+    )
+    assert get_default_soap_llm_client() is None
+
+
+def test_langchain_soap_llm_client_wraps_missing_api_key_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from app.clients import soap_llm_client
+    from app.clients.soap_llm_client import LangChainSoapLlmClient
+
+    def _raise_value_error(_model: str, **_kwargs: Any) -> Any:
+        raise ValueError("API key required")
+
+    monkeypatch.setattr(
+        soap_llm_client.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(init_chat_model=_raise_value_error),
+    )
+
+    async def _run() -> None:
+        client = LangChainSoapLlmClient(provider="google_genai", model="gemini-3.5-flash-lite")
+        with pytest.raises(SoapLlmClientError) as exc_info:
+            await client.extract_spoa({"new_segments": []})
+        assert exc_info.value.code == "LLM_NOT_CONFIGURED"
+
+    asyncio.run(_run())
+
+
+def test_extract_payload_includes_recent_context_and_trims_it_before_failing() -> None:
+    async def _run() -> None:
+        conv, lookup = _setup_conversation()
+        manager = SoapStateManager(conversation_id=conv.conversation_id)
+        payload = manager.build_extract_payload(
+            new_segments=[conv.finalized_segments[-1]],
+            all_final_segments=conv.finalized_segments,
+            max_context_segments=2,
+        )
+        assert len(payload["recent_context_segments"]) == 2
+        assert payload["recent_context_segments"][0]["text"] == conv.finalized_segments[1].text
+
+        # recent_context_segments だけ削れば上限に収まる場合はエラーにせず続行する
+        import json
+
+        without_context_len = len(
+            json.dumps(
+                {**payload, "recent_context_segments": []},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+        with_context_len = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        assert with_context_len > without_context_len
+        fake = FakeSoapLlmClient(max_input_chars=without_context_len + 5)
+        outcome = await manager.run_extract_spoa(
+            llm_client=fake,
+            new_segments=[conv.finalized_segments[-1]],
+            segments_snapshot_lookup=lookup,
+            current_segments_lookup=lookup,
+            target_processed_transcript_revision=conv.transcript_revision,
+        )
+        assert outcome.applied_operations == 2
+
+    asyncio.run(_run())

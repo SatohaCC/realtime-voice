@@ -93,53 +93,119 @@ class SoapNoteModel(BaseModel):
 class LlmEvidenceRef(BaseModel):
     """LLM が構造化出力で返す発話根拠参照。"""
 
-    stream_id: str
-    segment_id: str
-    segment_revision: int = Field(ge=1)
-    quote: str = Field(min_length=1)
+    stream_id: str = Field(description="参照元発話の stream_id を入力JSONからそのままコピーする")
+    segment_id: str = Field(description="参照元発話の segment_id を入力JSONからそのままコピーする")
+    segment_revision: int = Field(
+        ge=1,
+        description="参照元発話の segment_revision を入力JSONからそのままコピーする",
+    )
+    quote: str = Field(
+        min_length=1,
+        description="参照元発話 text からの一字一句変えない連続部分文字列（要約・言い換え禁止）",
+    )
 
 
 class LlmPlanRef(BaseModel):
     """LLM が A 最終更新時に返す参照元 P 要素。"""
 
-    item_id: str
-    item_revision: int = Field(ge=1)
+    item_id: str = Field(description="plan_items 内の既存 P 要素の item_id")
+    item_revision: int = Field(ge=1, description="plan_items 内の既存 P 要素の item_revision")
 
 
 class LlmSoapOperation(BaseModel):
     """会話中の extract_spoa タスクが返す構造化操作候補。"""
 
-    action: Literal["add", "update", "retract"]
-    section: SoapSectionKey
-    item_id: str | None = None
-    target_section: SoapSectionKey | None = None
-    text: str | None = None
-    evidence_refs: list[LlmEvidenceRef] = Field(default_factory=list)
-    retraction_reason: str | None = None
-    verification_status: Literal["reported", "confirmed"] = "reported"
+    action: Literal["add", "update", "retract"] = Field(
+        description=(
+            "add: 新規追加, update: 既存item_id更新または欄移動, retract: 訂正等による撤回"
+        )
+    )
+    section: SoapSectionKey = Field(
+        description=(
+            "対象欄 (S:主観的情報, O:客観的情報, A:アセスメント[SOをもとにPを実施した理由], P:計画)"
+        )
+    )
+    item_id: str | None = Field(
+        default=None,
+        description=(
+            "update または retract のときのみ current_soap の既存 item_id を指定。add 時は null"
+        ),
+    )
+    target_section: SoapSectionKey | None = Field(
+        default=None,
+        description="別欄へ移動する update のときのみ移動先の欄を指定。通常は null",
+    )
+    text: str | None = Field(
+        default=None,
+        description="add または update 後の簡潔な日本語要約テキスト。retract 時は null",
+    )
+    evidence_refs: list[LlmEvidenceRef] = Field(
+        default_factory=list,
+        description="操作の直接根拠となる発話参照の配列（必須・最低1件）",
+    )
+    retraction_reason: str | None = Field(
+        default=None,
+        description="action=retract のときのみ撤回理由を記述。それ以外は null",
+    )
+    verification_status: Literal["reported", "confirmed"] = Field(
+        default="reported",
+        description="O欄で薬剤師が測定・確認した事実なら confirmed、患者申告や一般項目は reported",
+    )
 
 
 class LlmExtractSpoaResult(BaseModel):
     """会話中タスク extract_spoa の構造化出力契約。"""
 
-    operations: list[LlmSoapOperation] = Field(default_factory=list)
+    operations: list[LlmSoapOperation] = Field(
+        default_factory=list,
+        description=(
+            "適用すべき SOAP 差分操作のリスト。該当なし（挨拶・質問のみ等）の場合は空配列 []"
+        ),
+    )
 
 
 class LlmFinalizeAOperation(BaseModel):
     """停止時タスク finalize_a_from_p が返す A 推測操作候補。"""
 
-    action: Literal["add", "update", "retract"]
-    item_id: str | None = None
-    text: str | None = None
-    derived_from_plan_items: list[LlmPlanRef] = Field(default_factory=list)
-    evidence_refs: list[LlmEvidenceRef] = Field(default_factory=list)
-    retraction_reason: str | None = None
+    action: Literal["add", "update", "retract"] = Field(
+        description=(
+            "add: アセスメント案の新規追加, update: 既存 plan_inference 項目の更新, retract: 撤回"
+        )
+    )
+    item_id: str | None = Field(
+        default=None,
+        description=(
+            "existing_a_items 内の origin='plan_inference' を更新/撤回時のみ指定。add 時は null"
+        ),
+    )
+    text: str | None = Field(
+        default=None,
+        description=(
+            "S・O の情報から判断して P を実施した理由をまとめた要確認のアセスメント案テキスト。"
+            "retract 時は null"
+        ),
+    )
+    derived_from_plan_items: list[LlmPlanRef] = Field(
+        default_factory=list,
+        description="根拠とした plan_items の item_id と item_revision の配列",
+    )
+    evidence_refs: list[LlmEvidenceRef] = Field(
+        default_factory=list,
+        description="P 要素が持つ根拠発話参照。省略時は空配列 []（Pの根拠を自動継承）",
+    )
+    retraction_reason: str | None = Field(
+        default=None,
+        description="action=retract のときのみ撤回理由を記述。それ以外は null",
+    )
 
 
 class LlmFinalizeAResult(BaseModel):
     """停止時タスク finalize_a_from_p の構造化出力契約。"""
 
-    operations: list[LlmFinalizeAOperation] = Field(default_factory=list)
+    operations: list[LlmFinalizeAOperation] = Field(
+        default_factory=list,
+        description="plan_inference に対する操作のリスト。操作不要なら空配列 []",
+    )
 
 
 class BaseConversationEvent(BaseModel):

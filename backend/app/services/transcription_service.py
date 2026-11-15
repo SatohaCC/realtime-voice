@@ -170,10 +170,12 @@ async def relay_deepgram_stream(
         if max_session_seconds is not None
         else settings.transcription_max_session_seconds
     )
+    use_mono_mix = config.enable_soap and config.channels == 2 and settings.stt_mono_mix_enabled
+    deepgram_channels = 1 if use_mono_mix else config.channels
 
     try:
         async with resolved_client.connect_listen_stream(
-            channels=config.channels,
+            channels=deepgram_channels,
             language=config.language,
             sample_rate=config.sample_rate,
             endpointing_ms=config.endpointing_ms,
@@ -212,6 +214,7 @@ async def relay_deepgram_stream(
                     registry=conversation_registry,
                     timing=soap_timing,
                     now_fn=get_now,
+                    mono_mix=use_mono_mix,
                 )
                 return
 

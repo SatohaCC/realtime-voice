@@ -1,5 +1,7 @@
 import array
 
+import pytest
+
 from app.services.conversation_service import (
     BackendAudioLevelHistory,
     ConversationTranscriptState,
@@ -207,3 +209,30 @@ def test_simultaneous_speech_ordered_by_audio_time_and_stream_resume() -> None:
         )
     )
     assert [seg.text for seg in state2.segments] == ["0.5秒目", "2秒目", "再開後の0.2秒目"]
+
+
+@pytest.mark.parametrize(
+    "text,start,end,right_amp",
+    [
+        ("はい。", 0.1, 0.5, 200),
+        ("いいえ。", 0.1, 0.5, 200),
+        ("毎日朝食後に1錠飲んでください", 1.7, 2.0, 200),
+        ("毎日朝食後に1錠飲んでください", 0.1, 1.8, 3500),
+    ],
+)
+def test_ambiguous_crosstalk_preserves_short_replies_and_overlapping_speech(
+    text: str, start: float, end: float, right_amp: int
+) -> None:
+    state = ConversationTranscriptState(conversation_id="conv-preserve")
+    state.start_stream()
+    state.append_pcm16(
+        _make_stereo_pcm16(left_amp=6000, right_amp=right_amp, samples_per_channel=32000),
+        channels=2,
+        sample_rate=16000,
+    )
+    state.apply_deepgram_event(DeepgramTranscriptInput(0, text, True, True, 0.1, 1.8, 0.95))
+    reply = state.apply_deepgram_event(
+        DeepgramTranscriptInput(1, text, True, True, start, end, 0.95)
+    )
+    assert not reply.suppressed_crosstalk
+    assert [seg.speaker_role for seg in state.finalized_segments] == ["pharmacist", "patient"]
