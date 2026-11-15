@@ -1,9 +1,14 @@
 from contextlib import suppress
+from typing import Annotated
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 
+from app.routers.dependencies import get_current_user
+from app.schemas.auth import AuthenticatedUser
+from app.schemas.speaker import DeleteConversationSegmentResponse
 from app.schemas.transcription import TranscriptionStreamConfig
 from app.services.auth_service import is_origin_allowed
+from app.services.soap_stream_service import delete_conversation_segment
 from app.services.transcription_service import relay_deepgram_stream
 
 router = APIRouter(prefix="/api/transcriptions", tags=["transcriptions"])
@@ -67,4 +72,33 @@ async def transcribe_websocket(
         client_ws=adapter,
         config=config,
         on_close=_close_connection,
+    )
+
+
+@router.delete(
+    "/conversations/{conversation_id}/segments",
+    response_model=DeleteConversationSegmentResponse,
+)
+async def remove_conversation_segment(
+    conversation_id: str,
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    stream_id: str = Query(min_length=1, max_length=128),
+    segment_id: str = Query(min_length=1, max_length=128),
+) -> DeleteConversationSegmentResponse:
+    """停止中や再開前の会話レコードから重複発話を削除し、SOAP との整合結果を返す。"""
+    result = delete_conversation_segment(
+        user_id=current_user.user_id,
+        conversation_id=conversation_id,
+        stream_id=stream_id,
+        segment_id=segment_id,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="対象の発話が見つかりません。")
+    deleted_segment, outcome = result
+    return DeleteConversationSegmentResponse(
+        conversation_id=conversation_id,
+        segment=deleted_segment,
+        soap=outcome.soap,
+        changed_item_ids=outcome.changed_item_ids,
+        retracted_item_ids=outcome.retracted_item_ids,
     )

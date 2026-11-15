@@ -212,11 +212,17 @@ describe("transcriptReducer", () => {
         baseUrl: "ws://localhost:8000",
       });
       session.updateSegmentSpeaker("stream-1", "seg-2", "patient");
+      session.deleteSegment("stream-1", "seg-3");
       expect(sent.map((item) => JSON.parse(item))).toContainEqual({
         type: "UpdateSegmentSpeaker",
         stream_id: "stream-1",
         segment_id: "seg-2",
         speaker_role: "patient",
+      });
+      expect(sent.map((item) => JSON.parse(item))).toContainEqual({
+        type: "DeleteSegment",
+        stream_id: "stream-1",
+        segment_id: "seg-3",
       });
       await session.close();
     } finally {

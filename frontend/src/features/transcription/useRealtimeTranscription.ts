@@ -4,13 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDualMicAudio } from "@/features/audio/useDualMicAudio";
 import type { AudioCaptureFrame } from "@/shared/lib/audio/dualMicCapture";
 import {
+  applyConversationSegmentDeleted,
   applyConversationWsEvent,
   type ConversationWorkspaceState,
   clearSoapHighlights,
   createInitialConversationState,
   prepareStreamReconnect,
 } from "@/shared/lib/conversation/conversationReducer";
-import type { SpeakerRole } from "@/shared/lib/conversation/types";
+import type { SoapNote, SpeakerRole } from "@/shared/lib/conversation/types";
 import { getValidAccessToken, subscribeAuthState } from "@/shared/lib/supabase/client";
 import { AudioLevelHistory } from "@/shared/lib/transcription/audioLevelHistory";
 import {
@@ -21,6 +22,7 @@ import {
 import {
   applyDeepgramTranscriptEvent,
   createInitialTranscriptState,
+  removeTranscriptSegment,
   startTranscriptSession,
 } from "@/shared/lib/transcription/transcriptReducer";
 
@@ -338,6 +340,64 @@ export function useRealtimeTranscription({
     [],
   );
 
+  const deleteSegment = useCallback(
+    (streamId: string, segmentId: string) => {
+      if (audio.mode === "single") {
+        setTranscriptState((current) => removeTranscriptSegment(current, segmentId));
+        return;
+      }
+      const run = runRef.current;
+      if (run && !run.invalidated && run.phase === "streaming") {
+        run.session?.deleteSegment(streamId, segmentId);
+        return;
+      }
+      if (run) {
+        return;
+      }
+      const targetConvId = conversationIdRef.current;
+      setConversationState((current) =>
+        applyConversationSegmentDeleted(current, { streamId, segmentId }),
+      );
+      void (async () => {
+        try {
+          const accessToken = await getValidAccessToken();
+          if (!accessToken || conversationIdRef.current !== targetConvId) return;
+          const params = new URLSearchParams({
+            stream_id: streamId,
+            segment_id: segmentId,
+          });
+          const res = await fetch(
+            `/api/transcriptions/conversations/${encodeURIComponent(targetConvId)}/segments?${params.toString()}`,
+            {
+              method: "DELETE",
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+              },
+            },
+          );
+          if (!res.ok || conversationIdRef.current !== targetConvId) return;
+          const data = (await res.json()) as {
+            soap?: SoapNote;
+            changed_item_ids?: string[];
+          };
+          if (data.soap) {
+            setConversationState((current) =>
+              applyConversationSegmentDeleted(current, {
+                streamId,
+                segmentId,
+                soap: data.soap,
+                changedItemIds: data.changed_item_ids,
+              }),
+            );
+          }
+        } catch {
+          // サーバー上の会話期限切れやオフライン時はローカル削除状態をそのまま維持する
+        }
+      })();
+    },
+    [audio.mode],
+  );
+
   return {
     audio,
     segments: transcriptState.segments,
@@ -350,5 +410,6 @@ export function useRealtimeTranscription({
     clearTranscripts,
     startNewConversation,
     updateSegmentSpeaker,
+    deleteSegment,
   };
 }

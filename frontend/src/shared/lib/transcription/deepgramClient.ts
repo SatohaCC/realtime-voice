@@ -50,6 +50,7 @@ export interface DeepgramStreamSession {
     segmentId: string,
     speakerRole: "pharmacist" | "patient" | "unknown",
   ) => void;
+  deleteSegment: (streamId: string, segmentId: string) => void;
   close: () => Promise<void>;
 }
 
@@ -339,6 +340,16 @@ export function createDeepgramStreamSession({
             stream_id: streamId,
             segment_id: segmentId,
             speaker_role: speakerRole,
+          }),
+        );
+      },
+      deleteSegment: (streamId, segmentId) => {
+        if (!settled || closing || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(
+          JSON.stringify({
+            type: "DeleteSegment",
+            stream_id: streamId,
+            segment_id: segmentId,
           }),
         );
       },

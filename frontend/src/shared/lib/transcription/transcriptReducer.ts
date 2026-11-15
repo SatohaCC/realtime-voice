@@ -149,3 +149,20 @@ export function applyDeepgramTranscriptEvent(
     nextSequence: state.nextSequence + 1,
   };
 }
+
+/**
+ * 1マイク表示などで重複・不要な確定発話をローカル配列から削除する。
+ */
+export function removeTranscriptSegment(
+  state: TranscriptFeedState,
+  segmentId: string,
+): TranscriptFeedState {
+  const nextSegments = state.segments.filter((segment) => segment.id !== segmentId);
+  if (nextSegments.length === state.segments.length) {
+    return state;
+  }
+  return {
+    ...state,
+    segments: nextSegments,
+  };
+}

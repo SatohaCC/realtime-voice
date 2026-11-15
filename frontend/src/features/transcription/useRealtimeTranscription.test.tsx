@@ -74,6 +74,7 @@ function deferred<T>() {
 const session = () => ({
   sendAudio: vi.fn(),
   updateSegmentSpeaker: vi.fn(),
+  deleteSegment: vi.fn(),
   close: vi.fn(async () => {}),
 });
 
@@ -538,5 +539,7 @@ it("会話イベント受信・新しい会話開始・重複デバイス遮断�
   act(() => hook.result.current.updateSegmentSpeaker("stream-3", "seg-1", "patient"));
   const activeSession = await mocks.connect.mock.results[2].value;
   expect(activeSession.updateSegmentSpeaker).toHaveBeenCalledWith("stream-3", "seg-1", "patient");
+  act(() => hook.result.current.deleteSegment("stream-3", "seg-2"));
+  expect(activeSession.deleteSegment).toHaveBeenCalledWith("stream-3", "seg-2");
   hook.unmount();
 });

@@ -41,6 +41,8 @@ export interface TranscriptChatProps {
     segmentId: string,
     speakerRole: TranscriptSpeakerRole,
   ) => void;
+  getDeleteSegmentLabel?: (segment: { timeLabel: string; text: string }) => string;
+  onDeleteSegment?: (streamId: string, segmentId: string) => void;
 }
 
 interface GroupedTurn {
@@ -120,6 +122,8 @@ export function TranscriptChat({
   speakerOptions,
   getSpeakerSelectLabel,
   onChangeSegmentSpeaker,
+  getDeleteSegmentLabel,
+  onDeleteSegment,
 }: TranscriptChatProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const segmentRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
@@ -269,26 +273,60 @@ export function TranscriptChat({
                         {turn.items.map((segment) => {
                           const segKey = `${segment.streamId}:${segment.segmentId}`;
                           const isHighlighted = highlightedSegmentKey === segKey;
+                          const canDeleteSegment =
+                            Boolean(onDeleteSegment) && segment.status !== "interim";
                           return (
-                            <span
-                              key={segKey}
-                              ref={(node) => {
-                                if (node) {
-                                  segmentRefs.current.set(segKey, node);
-                                } else {
-                                  segmentRefs.current.delete(segKey);
-                                }
-                              }}
-                              data-segment-key={segKey}
-                              data-highlighted={isHighlighted ? "true" : undefined}
-                              {...stylex.props(
-                                s.segmentText,
-                                segment.status === "interim" && s.segmentTextInterim,
-                                isHighlighted && s.segmentTextHighlighted,
-                              )}
-                            >
-                              {segment.text}
-                            </span>
+                            <div key={segKey} {...stylex.props(s.segmentRow)}>
+                              <span
+                                ref={(node) => {
+                                  if (node) {
+                                    segmentRefs.current.set(segKey, node);
+                                  } else {
+                                    segmentRefs.current.delete(segKey);
+                                  }
+                                }}
+                                data-segment-key={segKey}
+                                data-highlighted={isHighlighted ? "true" : undefined}
+                                {...stylex.props(
+                                  s.segmentText,
+                                  segment.status === "interim" && s.segmentTextInterim,
+                                  isHighlighted && s.segmentTextHighlighted,
+                                )}
+                              >
+                                {segment.text}
+                              </span>
+                              {canDeleteSegment && onDeleteSegment ? (
+                                <button
+                                  type="button"
+                                  aria-label={
+                                    getDeleteSegmentLabel?.({
+                                      timeLabel: segment.timeLabel,
+                                      text: segment.text,
+                                    }) ?? `${segment.timeLabel} ${segment.text}`
+                                  }
+                                  onClick={() =>
+                                    onDeleteSegment(segment.streamId, segment.segmentId)
+                                  }
+                                  {...stylex.props(s.deleteSegmentButton)}
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    aria-hidden="true"
+                                  >
+                                    <path
+                                      d="M18 6L6 18M6 6L18 18"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                </button>
+                              ) : null}
+                            </div>
                           );
                         })}
                       </div>

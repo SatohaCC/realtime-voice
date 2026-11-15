@@ -1389,3 +1389,153 @@ def test_ws_manual_speaker_override_updates_segment_and_reconciles_soap() -> Non
         assert soap_updates[-1]["soap"]["sections"]["P"]["items"] == []
 
     asyncio.run(_run())
+
+
+def test_ws_delete_segment_removes_utterance_and_reconciles_soap() -> None:
+    async def _run() -> None:
+        ws = _StubClientWs(
+            [
+                json.dumps({"type": "Auth", "access_token": "valid-token"}),
+            ]
+        )
+        dg = _StubDeepgramClient(
+            [
+                _dg_result(
+                    channel=0,
+                    text="毎食後に1錠飲んでください",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.2,
+                    duration=1.2,
+                )
+            ]
+        )
+        llm = _CountingLlmClient()
+        registry = ConversationSessionRegistry()
+
+        task = asyncio.create_task(
+            relay_deepgram_stream(
+                ws,
+                TranscriptionStreamConfig(
+                    channels=2, enable_soap=True, conversation_id="conv-delete-ws"
+                ),
+                client=dg,
+                auth_client=_StubAuthClient(),
+                llm_client=llm,
+                conversation_registry=registry,
+                soap_timing=_fast_timing(),
+            )
+        )
+
+        for _ in range(80):
+            events = ws.parsed_events()
+            if any(
+                ev.get("type") == "SoapUpdated" and ev["soap"]["sections"]["P"]["items"]
+                for ev in events
+            ):
+                break
+            await asyncio.sleep(0.02)
+
+        record = registry.get_or_create(user_id="user-1", conversation_id="conv-delete-ws")
+        seg = record.transcript_state.finalized_segments[0]
+        await ws._incoming.put(
+            json.dumps(
+                {
+                    "type": "DeleteSegment",
+                    "stream_id": seg.stream_id,
+                    "segment_id": seg.segment_id,
+                }
+            )
+        )
+        for _ in range(80):
+            events = ws.parsed_events()
+            if any(
+                ev.get("type") == "SoapUpdated" and ev.get("retracted_item_ids") for ev in events
+            ):
+                break
+            await asyncio.sleep(0.02)
+
+        await ws._incoming.put(json.dumps({"type": "CloseStream"}))
+        await task
+
+        events = ws.parsed_events()
+        removed_events = [
+            ev
+            for ev in events
+            if ev.get("type") == "TranscriptUpdated"
+            and ev.get("removed") is True
+            and ev["segment"]["segment_id"] == seg.segment_id
+        ]
+        assert len(removed_events) == 1
+        assert record.transcript_state.finalized_segments == []
+
+        soap_updates = [ev for ev in events if ev.get("type") == "SoapUpdated"]
+        assert any(ev.get("retracted_item_ids") for ev in soap_updates)
+        assert soap_updates[-1]["soap"]["sections"]["P"]["items"] == []
+
+    asyncio.run(_run())
+
+
+def test_rest_delete_conversation_segment_reconciles_soap_after_stop() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.routers.dependencies import get_current_user
+    from app.schemas.auth import AuthenticatedUser
+    from app.services.conversation_service import DeepgramTranscriptInput
+    from app.services.soap_stream_service import get_default_conversation_registry
+
+    registry = get_default_conversation_registry()
+    record = registry.get_or_create(user_id="user-rest-del", conversation_id="conv-rest-del")
+    stream_id = record.transcript_state.start_stream("s-rest")
+    res = record.transcript_state.apply_deepgram_event(
+        DeepgramTranscriptInput(0, "毎食後に服用してください", True, True, 0.1, 1.0, 0.95),
+    )
+    assert res.segment is not None
+    record.soap_manager.apply_extract_spoa_raw(
+        raw_result={
+            "operations": [
+                {
+                    "section": "P",
+                    "action": "add",
+                    "text": "毎食後に服用指導。",
+                    "evidence_refs": [
+                        {
+                            "stream_id": stream_id,
+                            "segment_id": res.segment.segment_id,
+                            "segment_revision": res.segment.segment_revision,
+                            "quote": "毎食後に服用してください",
+                            "speaker_role": "pharmacist",
+                        }
+                    ],
+                }
+            ]
+        },
+        segments_lookup={(stream_id, res.segment.segment_id): res.segment},
+        processed_transcript_revision=record.transcript_state.transcript_revision,
+    )
+
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+        user_id="user-rest-del",
+        email="pharm@example.com",
+        role="authenticated",
+        expires_at=9999999999,
+    )
+    try:
+        client = TestClient(app)
+        resp = client.delete(
+            f"/api/transcriptions/conversations/conv-rest-del/segments?stream_id={stream_id}&segment_id={res.segment.segment_id}"
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["conversation_id"] == "conv-rest-del"
+        assert body["segment"]["segment_id"] == res.segment.segment_id
+        assert body["retracted_item_ids"]
+        assert body["soap"]["sections"]["P"]["items"] == []
+
+        resp_missing = client.delete(
+            f"/api/transcriptions/conversations/conv-rest-del/segments?stream_id={stream_id}&segment_id={res.segment.segment_id}"
+        )
+        assert resp_missing.status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

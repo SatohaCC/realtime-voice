@@ -85,6 +85,7 @@ const meta = {
     scrollToBottomLabel: "↓ 新しい発話",
     speakerOptions: SPEAKER_OPTIONS,
     getSpeakerSelectLabel: ({ timeLabel }) => `${timeLabel} の話者を変更`,
+    getDeleteSegmentLabel: ({ timeLabel, text }) => `${timeLabel} の発話「${text}」を削除`,
     segments: INITIAL_SEGMENTS,
   },
 } satisfies Meta<typeof TranscriptChat>;
@@ -97,7 +98,22 @@ export const Default: Story = {};
 export const WithSpeakerSelector: Story = {
   render: (args) => {
     const [segments, setSegments] = useState<readonly TranscriptChatSegment[]>(() => [
-      ...INITIAL_SEGMENTS.slice(0, 3),
+      INITIAL_SEGMENTS[0],
+      {
+        streamId: "stream-1",
+        segmentId: "seg-dup",
+        channelIndex: 1,
+        align: "right",
+        speakerRole: "pharmacist",
+        roleName: "薬剤師",
+        micLabel: "マイク2",
+        timeLabel: "00:01.2",
+        text: "こんにちは。本日はどのようなお薬でお困りですか？",
+        status: "final",
+        statusLabel: "確定",
+      },
+      INITIAL_SEGMENTS[1],
+      INITIAL_SEGMENTS[2],
       {
         streamId: "stream-1",
         segmentId: "seg-u1",
@@ -130,6 +146,11 @@ export const WithSpeakerSelector: Story = {
                   }
                 : seg,
             ),
+          );
+        }}
+        onDeleteSegment={(streamId, segmentId) => {
+          setSegments((prev) =>
+            prev.filter((seg) => !(seg.streamId === streamId && seg.segmentId === segmentId)),
           );
         }}
       />

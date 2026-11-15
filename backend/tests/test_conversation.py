@@ -566,3 +566,30 @@ def test_word_clause_split_and_manual_speaker_override_protection() -> None:
         segment_embedding=patient_vec,
     )
     assert all(s.segment_id != short_res.segment.segment_id for s in next_res.refined_segments)
+
+
+def test_delete_segment_removes_final_and_rejects_interim() -> None:
+    state = ConversationTranscriptState(conversation_id="conv-del")
+    state.start_stream("s1")
+
+    interim_res = state.apply_deepgram_event(
+        DeepgramTranscriptInput(0, "こんに", False, False, 0.0, 0.2, 0.9),
+    )
+    assert interim_res.segment is not None
+    assert state.delete_segment(stream_id="s1", segment_id=interim_res.segment.segment_id) is None
+
+    final_res = state.apply_deepgram_event(
+        DeepgramTranscriptInput(0, "こんにちは。", True, True, 0.0, 0.4, 0.95),
+    )
+    dup_res = state.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "こんにちは。", True, True, 0.02, 0.42, 0.9),
+    )
+    assert final_res.segment is not None
+    assert dup_res.segment is not None
+    assert len(state.finalized_segments) == 2
+
+    deleted = state.delete_segment(stream_id="s1", segment_id=dup_res.segment.segment_id)
+    assert deleted is not None
+    assert deleted.segment_id == dup_res.segment.segment_id
+    assert [s.segment_id for s in state.finalized_segments] == [final_res.segment.segment_id]
+    assert state.delete_segment(stream_id="s1", segment_id=dup_res.segment.segment_id) is None

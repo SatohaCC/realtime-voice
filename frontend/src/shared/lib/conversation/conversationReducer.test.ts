@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyConversationSegmentDeleted,
   applyConversationWsEvent,
   createInitialConversationState,
   parseConversationWsEvent,
@@ -256,5 +257,79 @@ describe("conversationReducer", () => {
     const text = formatSoapNoteAsText(createInitialConversationState("conv-1").soap);
     expect(text).toContain("S (主観的情報)\n（未抽出）");
     expect(text).toContain("P (計画)\n（未抽出）");
+  });
+
+  it("applyConversationSegmentDeleted が削除セグメントと依存SOAP根拠を整合する", () => {
+    const initial = {
+      ...createInitialConversationState("conv-1"),
+      segments: [
+        {
+          stream_id: "s1",
+          segment_id: "seg-1",
+          segment_revision: 1,
+          transcript_revision: 1,
+          channel_index: 1 as const,
+          speaker_role: "patient" as const,
+          speaker_label: "患者",
+          text: "喉が痛い",
+          status: "final" as const,
+          start_sec: 0,
+          end_sec: 1,
+          confidence: 0.9,
+        },
+        {
+          stream_id: "s1",
+          segment_id: "seg-2",
+          segment_revision: 1,
+          transcript_revision: 2,
+          channel_index: 1 as const,
+          speaker_role: "patient" as const,
+          speaker_label: "患者",
+          text: "喉が痛い",
+          status: "final" as const,
+          start_sec: 0.1,
+          end_sec: 1.1,
+          confidence: 0.9,
+        },
+      ],
+      soap: {
+        soap_id: "soap-conv-1",
+        conversation_id: "conv-1",
+        revision: 1,
+        processed_transcript_revision: 2,
+        sections: {
+          S: {
+            revision: 1,
+            items: [
+              {
+                item_id: "soap-S-1",
+                item_revision: 1,
+                text: "喉の痛み",
+                evidence: [
+                  {
+                    stream_id: "s1",
+                    segment_id: "seg-2",
+                    segment_revision: 1,
+                    quote: "喉が痛い",
+                    speaker_role: "patient" as const,
+                  },
+                ],
+                origin: "conversation" as const,
+                derived_from_plan_items: [],
+                stale_after_plan_update: false,
+                verification_status: "reported" as const,
+              },
+            ],
+          },
+          O: { revision: 0, items: [] },
+          A: { revision: 0, items: [], derived_from_plan_revision: null },
+          P: { revision: 0, items: [] },
+        },
+      },
+    };
+
+    const next = applyConversationSegmentDeleted(initial, { streamId: "s1", segmentId: "seg-2" });
+    expect(next.segments.map((s) => s.segment_id)).toEqual(["seg-1"]);
+    expect(next.soap.sections.S.items).toEqual([]);
   });
 });

@@ -170,4 +170,43 @@ describe("TranscriptChat", () => {
     expect(turn).toBeInTheDocument();
     expect(screen.getByText("話者不明")).toBeInTheDocument();
   });
+
+  it("削除ボタン押下で対象セグメントのみ削除ハンドラを呼び、interim には表示しない", async () => {
+    const user = userEvent.setup();
+    const onDeleteSegment = vi.fn();
+    render(
+      <TranscriptChat
+        title="文字起こし"
+        segments={[
+          ...SAMPLE_SEGMENTS,
+          {
+            streamId: "s1",
+            segmentId: "seg-interim",
+            channelIndex: 0 as const,
+            speakerRole: "pharmacist" as const,
+            roleName: "薬剤師",
+            timeLabel: "00:09.5",
+            text: "確認します…",
+            status: "interim" as const,
+            statusLabel: "認識中",
+          },
+        ]}
+        emptyMessage="空"
+        scrollToBottomLabel="↓ 新しい発話"
+        getDeleteSegmentLabel={({ timeLabel, text }) => `${timeLabel} の発話「${text}」を削除`}
+        onDeleteSegment={onDeleteSegment}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "00:09.5 の発話「確認します…」を削除" }),
+    ).not.toBeInTheDocument();
+
+    const deleteButton = screen.getByRole("button", {
+      name: "00:06.8 の発話「熱は37.8℃です。」を削除",
+    });
+    await user.click(deleteButton);
+    expect(onDeleteSegment).toHaveBeenCalledTimes(1);
+    expect(onDeleteSegment).toHaveBeenCalledWith("s1", "seg-3");
+  });
 });

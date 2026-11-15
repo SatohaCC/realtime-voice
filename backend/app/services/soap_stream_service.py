@@ -32,9 +32,11 @@ from app.schemas.soap import (
     SoapStatusEvent,
     SoapUpdatedEvent,
     SpeakerRole,
+    TranscriptSegmentModel,
     TranscriptUpdatedEvent,
 )
 from app.schemas.speaker import (
+    DeleteSegmentFrame,
     SegmentSpeakerOverrideFrame,
     SpeakerProfileAckEvent,
     SpeakerProfileFrame,
@@ -48,7 +50,7 @@ from app.services.conversation_service import (
     build_word_clause_candidates,
     join_deepgram_words,
 )
-from app.services.soap_service import SoapStateManager
+from app.services.soap_service import SoapApplyOutcome, SoapStateManager
 from app.services.speaker_audio_service import select_speaker_audio
 
 _QueuePriority = Literal["high", "status", "interim"]
@@ -168,6 +170,22 @@ class ConversationSessionRegistry:
             evicted.transcript_state.clear_speaker_memory()
         return record
 
+    def get(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        now_monotonic: float | None = None,
+    ) -> ConversationSessionRecord | None:
+        now = now_monotonic if now_monotonic is not None else time.monotonic()
+        self._evict_expired(now)
+        key = (user_id, conversation_id)
+        existing = self._records.get(key)
+        if existing is not None:
+            existing.last_touched_monotonic = now
+            self._records.move_to_end(key)
+        return existing
+
     def _evict_expired(self, now: float) -> None:
         expired_keys = [
             key
@@ -186,6 +204,32 @@ _DEFAULT_REGISTRY = ConversationSessionRegistry()
 def get_default_conversation_registry() -> ConversationSessionRegistry:
     """既定のインメモリ会話レジストリを返す。"""
     return _DEFAULT_REGISTRY
+
+
+def delete_conversation_segment(
+    *,
+    user_id: str,
+    conversation_id: str,
+    stream_id: str,
+    segment_id: str,
+    registry: ConversationSessionRegistry | None = None,
+) -> tuple[TranscriptSegmentModel, SoapApplyOutcome] | None:
+    """録音停止後などに会話レジストリから発話を削除し、SOAP 根拠との整合を再評価する。"""
+    resolved_registry = registry or get_default_conversation_registry()
+    record = resolved_registry.get(user_id=user_id, conversation_id=conversation_id)
+    if record is None:
+        return None
+    deleted = record.transcript_state.delete_segment(
+        stream_id=stream_id,
+        segment_id=segment_id,
+    )
+    if deleted is None:
+        return None
+    current_lookup = {
+        (seg.stream_id, seg.segment_id): seg for seg in record.transcript_state.finalized_segments
+    }
+    outcome = record.soap_manager.reconcile_transcript_segments(current_lookup)
+    return deleted, outcome
 
 
 def _parse_deepgram_word_timings(alt0: dict[object, object]) -> tuple[DeepgramWordTiming, ...]:
@@ -448,6 +492,33 @@ class _SoapSessionCoordinator:
             if self._record.soap_status not in {"updating", "pending"}:
                 self.enqueue_soap_status(status="pending", has_unapplied_transcript=True)
             self._wakeup.set()
+
+    def handle_delete_segment(self, raw_payload: dict[str, object]) -> None:
+        """クライアント UI からの手動削除で確定発話を除外し、SOAP 整合を再評価する。"""
+        if not self.is_current():
+            return
+        try:
+            frame = DeleteSegmentFrame.model_validate(raw_payload)
+        except ValidationError:
+            return
+
+        deleted = self._record.transcript_state.delete_segment(
+            stream_id=frame.stream_id,
+            segment_id=frame.segment_id,
+        )
+        if deleted is None:
+            return
+
+        event = TranscriptUpdatedEvent(
+            protocol_version=self._timing.protocol_version,
+            conversation_id=self._record.conversation_id,
+            event_id=self._event_id(),
+            sequence=self._next_seq(),
+            segment=deleted,
+            removed=True,
+        )
+        self._queue.enqueue(event.model_dump_json(), priority="high")
+        self._reconcile_soap_with_transcript()
 
     def _parse_and_resolve_gate(self, raw_text: str) -> DeepgramTranscriptInput | None:
         parsed = _parse_deepgram_transcript_input(raw_text)
@@ -1186,6 +1257,9 @@ async def relay_soap_conversation_stream(
                     continue
                 if msg_type == "UpdateSegmentSpeaker":
                     coordinator.handle_segment_speaker_override(control)
+                    continue
+                if msg_type == "DeleteSegment":
+                    coordinator.handle_delete_segment(control)
                     continue
                 if msg_type == "CloseStream":
                     await deepgram_ws.send(payload)

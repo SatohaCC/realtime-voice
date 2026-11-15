@@ -653,6 +653,26 @@ class ConversationTranscriptState:
         self._segments[idx] = updated
         return updated
 
+    def delete_segment(
+        self,
+        *,
+        stream_id: str,
+        segment_id: str,
+    ) -> TranscriptSegmentModel | None:
+        """重複・不要な確定済み発話を会話レジストリから削除する。"""
+        key = (stream_id, segment_id)
+        idx = self._segment_index_by_key.get(key)
+        if idx is None:
+            return None
+        existing = self._segments[idx]
+        if existing.status == "interim":
+            return None
+        self._segments.pop(idx)
+        self._manual_speaker_overrides.discard(key)
+        self._rebuild_index()
+        self.transcript_revision += 1
+        return existing
+
     def speaker_embedding_interval(self, event: DeepgramTranscriptInput) -> tuple[float, float]:
         """近接した短発話を蓄積できる場合は、再照合対象全体の区間を返す。"""
         pending = self._pending_short_segments(event)

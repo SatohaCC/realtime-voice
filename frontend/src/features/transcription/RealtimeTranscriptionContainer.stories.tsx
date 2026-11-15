@@ -228,6 +228,12 @@ function InteractiveWorkspaceHarness(props: Partial<TranscriptionWorkspaceViewPr
             ),
           );
         },
+        getDeleteSegmentLabel: ({ timeLabel, text }) => `${timeLabel} の発話「${text}」を削除`,
+        onDeleteSegment: (streamId, segmentId) => {
+          setSegments((prev) =>
+            prev.filter((seg) => !(seg.streamId === streamId && seg.segmentId === segmentId)),
+          );
+        },
         ...props.transcriptChat,
       }}
       soapPanel={{

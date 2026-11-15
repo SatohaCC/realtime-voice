@@ -203,6 +203,7 @@ export function RealtimeTranscriptionContainer() {
     toggleTranscription,
     startNewConversation,
     updateSegmentSpeaker,
+    deleteSegment,
   } = useRealtimeTranscription({
     speakerProfile: speaker.voiceprint
       ? { modelId: speaker.voiceprint.modelId, embedding: speaker.voiceprint.embedding }
@@ -492,6 +493,8 @@ export function RealtimeTranscriptionContainer() {
         getSpeakerSelectLabel: ({ timeLabel }) => `${timeLabel} の話者を変更`,
         onChangeSegmentSpeaker:
           audio.mode === "dual" && isStreaming ? updateSegmentSpeaker : undefined,
+        getDeleteSegmentLabel: ({ timeLabel, text }) => `${timeLabel} の発話「${text}」を削除`,
+        onDeleteSegment: !isConnecting && !isStopping ? deleteSegment : undefined,
       }}
       soapPanel={{
         title: "SOAP",

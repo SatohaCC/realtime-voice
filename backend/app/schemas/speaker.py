@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.soap import SpeakerRole
+from app.schemas.soap import SoapNoteModel, SpeakerRole, TranscriptSegmentModel
 
 
 class SpeakerEnrollmentResponse(BaseModel):
@@ -42,3 +42,21 @@ class SegmentSpeakerOverrideFrame(BaseModel):
     stream_id: str = Field(min_length=1, max_length=128)
     segment_id: str = Field(min_length=1, max_length=128)
     speaker_role: SpeakerRole
+
+
+class DeleteSegmentFrame(BaseModel):
+    """画面からの手動操作で重複・不要な確定発話を削除する制御フレーム。"""
+
+    type: Literal["DeleteSegment"]
+    stream_id: str = Field(min_length=1, max_length=128)
+    segment_id: str = Field(min_length=1, max_length=128)
+
+
+class DeleteConversationSegmentResponse(BaseModel):
+    """REST 経由での確定発話削除と SOAP 再整合結果。"""
+
+    conversation_id: str
+    segment: TranscriptSegmentModel
+    soap: SoapNoteModel
+    changed_item_ids: list[str] = Field(default_factory=list)
+    retracted_item_ids: list[str] = Field(default_factory=list)
