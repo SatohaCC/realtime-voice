@@ -197,13 +197,22 @@ class DeepgramTranscriptInput:
 
 @dataclass(frozen=True)
 class TranscriptApplyOutcome:
-    """発話正規化の適用結果（後続再評価による訂正セグメント群を含む）。"""
+    """発話正規化の適用結果（後続再評価や他チャンネル重複置換による訂正セグメント群を含む）。"""
 
     segment: TranscriptSegmentModel | None
     removed: bool = False
     is_new_final: bool = False
     suppressed_crosstalk: bool = False
     refined_segments: tuple[TranscriptSegmentModel, ...] = ()
+    removed_segments: tuple[TranscriptSegmentModel, ...] = ()
+
+
+_PUNCT_AND_SPACE_RE = re.compile(r"[\s。、．，！？!?,.\-ー〜]+")
+
+
+def _strip_text_for_match(text: str) -> str:
+    """比較用に空白と一般的な句読点を除いた文字列を返す。"""
+    return _PUNCT_AND_SPACE_RE.sub("", text)
 
 
 def _char_bigram_jaccard(text_a: str, text_b: str) -> float:
@@ -220,6 +229,144 @@ def _char_bigram_jaccard(text_a: str, text_b: str) -> float:
     grams_b = {norm_b[i : i + 2] for i in range(len(norm_b) - 1)}
     union = grams_a | grams_b
     return len(grams_a & grams_b) / len(union) if union else 0.0
+
+
+def _char_bigram_overlap_coeff(norm_a: str, norm_b: str) -> float:
+    """短文側を分母にした 2-gram 包含係数を算出する（長短差がある回り込み検出用）。"""
+    if not norm_a or not norm_b:
+        return 0.0
+    if norm_a == norm_b:
+        return 1.0
+    if len(norm_a) == 1 or len(norm_b) == 1:
+        return 1.0 if norm_a == norm_b else 0.0
+    grams_a = {norm_a[i : i + 2] for i in range(len(norm_a) - 1)}
+    grams_b = {norm_b[i : i + 2] for i in range(len(norm_b) - 1)}
+    denom = min(len(grams_a), len(grams_b))
+    return len(grams_a & grams_b) / denom if denom > 0 else 0.0
+
+
+def _preferred_channel_for_role(role: SpeakerRole) -> int | None:
+    if role == "pharmacist":
+        return 0
+    if role == "patient":
+        return 1
+    return None
+
+
+def _is_voiceprint_channel_duplicate(
+    *,
+    incoming_text: str,
+    incoming_start_sec: float,
+    incoming_end_sec: float,
+    incoming_role: SpeakerRole,
+    incoming_channel: int,
+    existing: TranscriptSegmentModel,
+    overlap_levels: tuple[float, float],
+) -> bool:
+    """声紋有効時の 2ch 間重複（同一話者の両マイク拾い・片側 unknown 混入）かを判定する。"""
+    inter = max(
+        0.0,
+        min(existing.end_sec, incoming_end_sec) - max(existing.start_sec, incoming_start_sec),
+    )
+    if inter <= 0.0:
+        return False
+
+    # 別々の既知話者（薬剤師 vs 患者）と判定できている場合は同時発話として必ず保持する
+    if (
+        incoming_role in {"pharmacist", "patient"}
+        and existing.speaker_role in {"pharmacist", "patient"}
+        and incoming_role != existing.speaker_role
+    ):
+        return False
+
+    cur_dur = max(0.0, incoming_end_sec - incoming_start_sec)
+    seg_dur = max(0.0, existing.end_sec - existing.start_sec)
+    union = max(existing.end_sec, incoming_end_sec) - min(existing.start_sec, incoming_start_sec)
+    iou = inter / union if union > 0 else 0.0
+    shorter = min(seg_dur, cur_dur)
+    containment = inter / shorter if shorter > 0 else 0.0
+    if not (iou >= 0.40 or containment >= 0.55):
+        return False
+
+    same_known_role = (
+        incoming_role in {"pharmacist", "patient"} and incoming_role == existing.speaker_role
+    )
+    if same_known_role:
+        return True
+
+    norm_in = _strip_text_for_match(incoming_text)
+    norm_ex = _strip_text_for_match(existing.text)
+    min_chars = min(len(norm_in), len(norm_ex))
+    jaccard = _char_bigram_jaccard(norm_in, norm_ex)
+    overlap_coeff = _char_bigram_overlap_coeff(norm_in, norm_ex)
+
+    in_rms = overlap_levels[incoming_channel]
+    ex_rms = overlap_levels[existing.channel_index]
+    dominant_rms = max(in_rms, ex_rms)
+    weaker_rms = min(in_rms, ex_rms)
+
+    # 文字内容が一致・包含される重複（句読点・語尾違い・長短分割ズレに対応）
+    if min_chars >= 4 and (
+        jaccard >= 0.50 or overlap_coeff >= 0.70 or norm_in in norm_ex or norm_ex in norm_in
+    ):
+        return True
+
+    # 短文（「はい」等）は同一文かつ明確な音量劣位の場合のみ回り込み扱いとし、同時相槌を保護する
+    if (
+        min_chars >= 1
+        and norm_in == norm_ex
+        and containment >= 0.65
+        and dominant_rms >= max(weaker_rms * 2.2, 0.01)
+    ):
+        return True
+
+    # 片側のみ unknown で 4 文字以上かつ時刻大部分重畳＋明確な音量優位側がある場合も回り込みとみなす
+    one_unknown = (incoming_role == "unknown") != (existing.speaker_role == "unknown")
+    if one_unknown and min_chars >= 4 and containment >= 0.65:
+        known_rms = in_rms if incoming_role != "unknown" else ex_rms
+        unknown_rms = ex_rms if incoming_role != "unknown" else in_rms
+        if known_rms >= max(unknown_rms * 1.35, 0.01):
+            return True
+
+    return False
+
+
+def _should_prefer_incoming_duplicate(
+    *,
+    incoming_channel: int,
+    incoming_role: SpeakerRole,
+    incoming_confidence: float,
+    incoming_text: str,
+    existing: TranscriptSegmentModel,
+    overlap_levels: tuple[float, float],
+) -> bool:
+    """重複ペアから残すべきチャンネル側を判定する（True なら受信側を優先して既存を削除）。"""
+    in_rank = 1 if incoming_role in {"pharmacist", "patient"} else 0
+    ex_rank = 1 if existing.speaker_role in {"pharmacist", "patient"} else 0
+    if in_rank != ex_rank:
+        return in_rank > ex_rank
+
+    in_rms = overlap_levels[incoming_channel]
+    ex_rms = overlap_levels[existing.channel_index]
+    if in_rms > 0.0 or ex_rms > 0.0:
+        if in_rms >= ex_rms * 1.25:
+            return True
+        if ex_rms >= in_rms * 1.25:
+            return False
+
+    target_role = (
+        incoming_role if incoming_role in {"pharmacist", "patient"} else existing.speaker_role
+    )
+    preferred_ch = _preferred_channel_for_role(target_role)
+    if preferred_ch is not None:
+        if incoming_channel == preferred_ch and existing.channel_index != preferred_ch:
+            return True
+        if existing.channel_index == preferred_ch and incoming_channel != preferred_ch:
+            return False
+
+    in_len = len(_strip_text_for_match(incoming_text))
+    ex_len = len(_strip_text_for_match(existing.text))
+    return (round(incoming_confidence, 3), in_len) > (round(existing.confidence, 3), ex_len)
 
 
 def is_crosstalk_duplicate(
@@ -438,6 +585,7 @@ class ConversationTranscriptState:
         levels = (0.0, 0.0)
         voiceprint_active = self._speaker_tracker.has_pharmacist_profile
 
+        removed_segments: list[TranscriptSegmentModel] = []
         if event.is_final and not single_stream_diarized:
             levels = self._audio_history.levels_for(event.start_sec, event.end_sec)
             noise_floor = self._pcm_buffer.estimate_noise_floor()
@@ -452,7 +600,34 @@ class ConversationTranscriptState:
                 speaker_role = decision.speaker_role
                 speaker_label = decision.speaker_label
 
-            if is_crosstalk_duplicate(
+                suppress_incoming, evict_indices = self._evaluate_voiceprint_channel_duplicates(
+                    target_stream=target_stream,
+                    channel=channel,
+                    text=text,
+                    start_sec=event.start_sec,
+                    end_sec=event.end_sec,
+                    confidence=event.confidence,
+                    speaker_role=speaker_role,
+                    levels=levels,
+                )
+                if suppress_incoming:
+                    return self._suppress_incoming_crosstalk(
+                        target_stream=target_stream,
+                        interim_key=interim_key,
+                        active_interim_id=active_interim_id,
+                        channel=channel,
+                        speaker_role=speaker_role,
+                        speaker_label=speaker_label,
+                        text=text,
+                        event=event,
+                    )
+                if evict_indices:
+                    for evict_idx in sorted(evict_indices, reverse=True):
+                        evicted = self._segments.pop(evict_idx)
+                        self._suppressed_candidates.append(evicted)
+                        removed_segments.append(evicted)
+                    self._rebuild_index()
+            elif is_crosstalk_duplicate(
                 self._segments,
                 stream_id=target_stream,
                 channel_index=channel,
@@ -461,37 +636,18 @@ class ConversationTranscriptState:
                 end_sec=event.end_sec,
                 recent_channel_levels=levels,
                 speaker_role=speaker_role,
-                used_voiceprint=voiceprint_active,
+                used_voiceprint=False,
                 noise_floor=noise_floor,
             ):
-                removed_segment: TranscriptSegmentModel | None = None
-                if active_interim_id is not None:
-                    self._active_interim_ids.pop(interim_key, None)
-                    idx = self._segment_index_by_key.pop((target_stream, active_interim_id), None)
-                    if idx is not None:
-                        removed_segment = self._segments.pop(idx)
-                        self._rebuild_index()
-                archived = TranscriptSegmentModel(
-                    stream_id=target_stream,
-                    segment_id=active_interim_id or f"suppressed-{self._next_segment_seq}",
-                    segment_revision=1,
-                    transcript_revision=max(1, self.transcript_revision),
-                    channel_index=1 if channel == 1 else 0,
+                return self._suppress_incoming_crosstalk(
+                    target_stream=target_stream,
+                    interim_key=interim_key,
+                    active_interim_id=active_interim_id,
+                    channel=channel,
                     speaker_role=speaker_role,
                     speaker_label=speaker_label,
                     text=text,
-                    status="final",
-                    start_sec=max(0.0, event.start_sec),
-                    end_sec=max(event.start_sec, event.end_sec),
-                    confidence=max(0.0, min(1.0, event.confidence)),
-                    speech_final=event.speech_final,
-                )
-                self._suppressed_candidates.append(archived)
-                return TranscriptApplyOutcome(
-                    segment=removed_segment,
-                    removed=removed_segment is not None,
-                    is_new_final=False,
-                    suppressed_crosstalk=True,
+                    event=event,
                 )
 
         next_status: TranscriptStatus = "final" if event.is_final else "interim"
@@ -557,7 +713,106 @@ class ConversationTranscriptState:
         return TranscriptApplyOutcome(
             segment=result_segment,
             is_new_final=event.is_final,
+            suppressed_crosstalk=bool(removed_segments),
             refined_segments=refined,
+            removed_segments=tuple(removed_segments),
+        )
+
+    def _evaluate_voiceprint_channel_duplicates(
+        self,
+        *,
+        target_stream: str,
+        channel: int,
+        text: str,
+        start_sec: float,
+        end_sec: float,
+        confidence: float,
+        speaker_role: SpeakerRole,
+        levels: tuple[float, float],
+    ) -> tuple[bool, list[int]]:
+        """他チャンネル確定発話との重複を比較し、(受信側除外, 置換対象index群) を返す。"""
+        other_index = 1 if channel == 0 else 0
+        evict_indices: list[int] = []
+        for idx, seg in enumerate(self._segments):
+            if (
+                seg.stream_id != target_stream
+                or seg.channel_index != other_index
+                or seg.status == "interim"
+            ):
+                continue
+            ov_start = max(seg.start_sec, start_sec)
+            ov_end = min(seg.end_sec, end_sec)
+            overlap_levels = (
+                self._audio_history.levels_for(ov_start, ov_end)
+                if ov_end - ov_start >= 0.05
+                else (0.0, 0.0)
+            )
+            if max(overlap_levels) <= 0.0:
+                overlap_levels = levels
+            if not _is_voiceprint_channel_duplicate(
+                incoming_text=text,
+                incoming_start_sec=start_sec,
+                incoming_end_sec=end_sec,
+                incoming_role=speaker_role,
+                incoming_channel=channel,
+                existing=seg,
+                overlap_levels=overlap_levels,
+            ):
+                continue
+            if _should_prefer_incoming_duplicate(
+                incoming_channel=channel,
+                incoming_role=speaker_role,
+                incoming_confidence=confidence,
+                incoming_text=text,
+                existing=seg,
+                overlap_levels=overlap_levels,
+            ):
+                evict_indices.append(idx)
+            else:
+                return True, []
+        return False, evict_indices
+
+    def _suppress_incoming_crosstalk(
+        self,
+        *,
+        target_stream: str,
+        interim_key: tuple[str, int],
+        active_interim_id: str | None,
+        channel: int,
+        speaker_role: SpeakerRole,
+        speaker_label: str,
+        text: str,
+        event: DeepgramTranscriptInput,
+    ) -> TranscriptApplyOutcome:
+        """受信側の回り込み重複発話を履歴に退避し、アクティブ interim があれば取り下げる。"""
+        removed_segment: TranscriptSegmentModel | None = None
+        if active_interim_id is not None:
+            self._active_interim_ids.pop(interim_key, None)
+            idx = self._segment_index_by_key.pop((target_stream, active_interim_id), None)
+            if idx is not None:
+                removed_segment = self._segments.pop(idx)
+                self._rebuild_index()
+        archived = TranscriptSegmentModel(
+            stream_id=target_stream,
+            segment_id=active_interim_id or f"suppressed-{self._next_segment_seq}",
+            segment_revision=1,
+            transcript_revision=max(1, self.transcript_revision),
+            channel_index=1 if channel == 1 else 0,
+            speaker_role=speaker_role,
+            speaker_label=speaker_label,
+            text=text,
+            status="final",
+            start_sec=max(0.0, event.start_sec),
+            end_sec=max(event.start_sec, event.end_sec),
+            confidence=max(0.0, min(1.0, event.confidence)),
+            speech_final=event.speech_final,
+        )
+        self._suppressed_candidates.append(archived)
+        return TranscriptApplyOutcome(
+            segment=removed_segment,
+            removed=removed_segment is not None,
+            is_new_final=False,
+            suppressed_crosstalk=True,
         )
 
     def _refine_preceding_unknown_short_segments(

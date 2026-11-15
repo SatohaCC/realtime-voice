@@ -495,7 +495,22 @@ class _SoapSessionCoordinator:
             )
             self._queue.enqueue(refined_event.model_dump_json(), priority="high")
 
-        if outcome.refined_segments or (outcome.removed and outcome.suppressed_crosstalk):
+        for removed_seg in outcome.removed_segments:
+            removed_event = TranscriptUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                segment=removed_seg,
+                removed=True,
+            )
+            self._queue.enqueue(removed_event.model_dump_json(), priority="high")
+
+        if (
+            outcome.refined_segments
+            or outcome.removed_segments
+            or (outcome.removed and outcome.suppressed_crosstalk)
+        ):
             self._reconcile_soap_with_transcript()
 
         if (outcome.is_new_final or outcome.refined_segments) and self._llm_client is not None:

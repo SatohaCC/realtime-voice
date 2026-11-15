@@ -122,6 +122,7 @@ def _dg_result(
     speech_final: bool,
     start: float,
     duration: float = 1.0,
+    confidence: float = 0.95,
 ) -> str:
     return json.dumps(
         {
@@ -131,7 +132,7 @@ def _dg_result(
             "duration": duration,
             "is_final": is_final,
             "speech_final": speech_final,
-            "channel": {"alternatives": [{"transcript": text, "confidence": 0.95}]},
+            "channel": {"alternatives": [{"transcript": text, "confidence": confidence}]},
         },
         ensure_ascii=False,
     )
@@ -964,5 +965,112 @@ def test_ws_speaker_profile_not_forwarded_to_deepgram_and_verifies_bleed() -> No
         assert len(finals) == 1
         # ch1 由来でも薬剤師声紋と一致したため pharmacist へ補正される
         assert finals[0]["segment"]["speaker_role"] == "pharmacist"
+
+    asyncio.run(_run())
+
+
+def test_ws_replaces_inferior_other_channel_duplicate_with_removed_event() -> None:
+    import array
+
+    from app.services.speaker_service import normalize_embedding
+
+    pharm_vec = normalize_embedding([1.0] + [0.0] * 31)
+    assert pharm_vec is not None
+
+    class _StubSpeakerClient:
+        model_id = "3dspeaker_campplus_zh_en_16k"
+        embedding_dim = 32
+
+        def __init__(self, vec: list[float]) -> None:
+            self._vec = list(vec)
+
+        def extract_embedding_from_pcm16(
+            self,
+            pcm16_bytes: bytes,
+            *,
+            sample_rate: int = 16000,
+            channels: int = 1,
+            channel_index: int = 0,
+        ) -> list[float] | None:
+            return list(self._vec)
+
+    buf = array.array("h")
+    for _ in range(48000):  # 3秒・2ch・近接マイク模擬
+        buf.append(4200)
+        buf.append(3900)
+    stereo_pcm = buf.tobytes()
+
+    async def _run() -> None:
+        ws = _StubClientWs(
+            [
+                json.dumps({"type": "Auth", "access_token": "valid-token"}),
+                json.dumps(
+                    {
+                        "type": "SpeakerProfile",
+                        "model_id": "3dspeaker_campplus_zh_en_16k",
+                        "embedding": pharm_vec,
+                    }
+                ),
+                stereo_pcm,
+                json.dumps({"type": "CloseStream"}),
+            ]
+        )
+        # ch1 誤認識「シャブンに」が先に届き、直後に ch0「処分に」が届く
+        dg = _StubDeepgramClient(
+            [
+                _dg_result(
+                    channel=1,
+                    text="シャブンに",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.2,
+                    duration=1.1,
+                    confidence=0.72,
+                ),
+                _dg_result(
+                    channel=0,
+                    text="処分に",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.2,
+                    duration=1.1,
+                    confidence=0.95,
+                ),
+            ]
+        )
+        llm = _CountingLlmClient()
+        spk = _StubSpeakerClient(pharm_vec)
+        registry = ConversationSessionRegistry()
+
+        await relay_deepgram_stream(
+            ws,
+            TranscriptionStreamConfig(channels=2, enable_soap=True, conversation_id="conv-ws-dup"),
+            client=dg,
+            auth_client=_StubAuthClient(),
+            llm_client=llm,
+            speaker_client=spk,
+            conversation_registry=registry,
+            soap_timing=_fast_timing(),
+            now_fn=lambda: 1_000_000.0,
+        )
+
+        events = ws.parsed_events()
+        transcript_events = [ev for ev in events if ev.get("type") == "TranscriptUpdated"]
+        removed = [ev for ev in transcript_events if ev.get("removed") is True]
+        assert len(removed) == 1
+        assert removed[0]["segment"]["text"] == "シャブンに"
+
+        kept = [
+            ev["segment"]["text"]
+            for ev in transcript_events
+            if not ev.get("removed") and ev["segment"]["text"] != "シャブンに"
+        ]
+        assert kept == ["処分に"]
+
+        record = registry.get_or_create(
+            user_id="user-1",
+            conversation_id="conv-ws-dup",
+        )
+        assert [seg.text for seg in record.transcript_state.finalized_segments] == ["処分に"]
 
     asyncio.run(_run())

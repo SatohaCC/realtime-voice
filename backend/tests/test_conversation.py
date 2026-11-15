@@ -329,3 +329,104 @@ def test_voiceprint_crosstalk_integration_and_delayed_short_refinement() -> None
     assert anchor_out.refined_segments[0].segment_id == short_out.segment.segment_id
     assert anchor_out.refined_segments[0].speaker_role == "patient"
     assert anchor_out.refined_segments[0].status == "refined"
+
+
+def test_voiceprint_deduplicates_same_speaker_bleed_regardless_of_order_length_and_kana() -> None:
+    from app.services.speaker_service import normalize_embedding
+
+    pharm_vec = normalize_embedding([1.0] + [0.0] * 31)
+    patient_vec = normalize_embedding([0.0, 1.0] + [0.0] * 30)
+    assert pharm_vec is not None
+    assert patient_vec is not None
+
+    state = ConversationTranscriptState(conversation_id="conv-dup-sym")
+    state.start_stream("s1")
+    assert state.set_pharmacist_profile(
+        model_id="3dspeaker_campplus_zh_en_16k", embedding=pharm_vec
+    )[0]
+
+    # 近接マイク配置を模擬: ch0=4200, ch1=3800（音量比 1.11 倍で従来の 1.8 倍未満）
+    state.append_pcm16(
+        _make_stereo_pcm16(left_amp=4200, right_amp=3800, samples_per_channel=128000),
+        channels=2,
+        sample_rate=16000,
+    )
+
+    # 1. 同音・ほぼ同音量の両 ch 「こんにちは。」を重複統合し 1 件だけ残す
+    a0 = state.apply_deepgram_event(
+        DeepgramTranscriptInput(0, "こんにちは。", True, True, 0.0, 0.9, 0.92),
+        segment_embedding=pharm_vec,
+    )
+    a1 = state.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "こんにちは。", True, True, 0.0, 0.9, 0.91),
+        segment_embedding=pharm_vec,
+    )
+    assert a0.segment is not None
+    assert a1.suppressed_crosstalk is True
+    assert [seg.text for seg in state.finalized_segments] == ["こんにちは。"]
+
+    # 2. ch1 側（誤変換「シャブンに」）が先着しても、後着 ch0（「処分に」）で置換統合される
+    b1_bleed = state.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "シャブンに", True, True, 2.2, 3.1, 0.72),
+        segment_embedding=pharm_vec,
+    )
+    assert b1_bleed.segment is not None
+    assert b1_bleed.segment.text == "シャブンに"
+
+    b0_clean = state.apply_deepgram_event(
+        DeepgramTranscriptInput(0, "処分に", True, True, 2.2, 3.1, 0.94),
+        segment_embedding=pharm_vec,
+    )
+    assert b0_clean.segment is not None
+    assert b0_clean.segment.text == "処分に"
+    assert len(b0_clean.removed_segments) == 1
+    assert b0_clean.removed_segments[0].segment_id == b1_bleed.segment.segment_id
+    assert [seg.text for seg in state.finalized_segments] == ["こんにちは。", "処分に"]
+
+    # 3. 短尺 unknown（「できてますか。」）が先着し、薬剤師発話が後着した場合は unknown 側を回収する
+    c1_unknown = state.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "できてますか。", True, True, 5.0, 5.6, 0.85),
+        segment_embedding=None,
+    )
+    assert c1_unknown.segment is not None
+    assert c1_unknown.segment.speaker_role == "unknown"
+
+    c0_pharm = state.apply_deepgram_event(
+        DeepgramTranscriptInput(0, "できてますか今お薬は", True, True, 5.1, 6.8, 0.95),
+        segment_embedding=pharm_vec,
+    )
+    assert c0_pharm.segment is not None
+    assert len(c0_pharm.removed_segments) == 1
+    assert c0_pharm.removed_segments[0].segment_id == c1_unknown.segment.segment_id
+    assert [seg.text for seg in state.finalized_segments] == [
+        "こんにちは。",
+        "処分に",
+        "できてますか今お薬は",
+    ]
+
+    # 4. 同時刻に「患者の声紋」として別話者判定された発話（および非類似の短返答）は保持する
+    state.append_pcm16(
+        _make_stereo_pcm16(left_amp=800, right_amp=4500, samples_per_channel=32000),
+        channels=2,
+        sample_rate=16000,
+    )
+    p_init = state.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "先月も同じお薬でした", True, True, 8.2, 9.8, 0.94),
+        segment_embedding=patient_vec,
+    )
+    assert p_init.segment is not None
+    assert p_init.segment.speaker_role == "patient"
+
+    d0 = state.apply_deepgram_event(
+        DeepgramTranscriptInput(0, "副作用はありませんか", True, True, 7.0, 8.5, 0.95),
+        segment_embedding=pharm_vec,
+    )
+    d1_patient = state.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "はい大丈夫です", True, True, 7.2, 8.2, 0.92),
+        segment_embedding=patient_vec,
+    )
+    assert d0.segment is not None
+    assert d1_patient.suppressed_crosstalk is False
+    patient_segments = [s for s in state.finalized_segments if s.text == "はい大丈夫です"]
+    assert len(patient_segments) == 1
+    assert patient_segments[0].speaker_role == "patient"
