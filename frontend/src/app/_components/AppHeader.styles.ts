@@ -13,19 +13,4 @@ export const appHeaderStyles = stylex.create({
     fontSize: "1.125rem",
     fontWeight: 600,
   },
-  authActions: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.75rem",
-    minWidth: 0,
-  },
-  userLabel: {
-    display: { default: "inline-block", "@media (max-width: 719px)": "none" },
-    maxWidth: "12rem",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    fontSize: "0.8125rem",
-    color: tokens.onSurfaceVariant,
-  },
 });

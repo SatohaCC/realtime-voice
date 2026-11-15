@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import * as stylex from "@stylexjs/stylex";
-import { Button } from "@/shared/ui/button/Button";
+import { Button } from "@/shared/ui";
 import { Header } from "./Header";
 import { headerStoryStyles } from "./Header.stories.styles";
 

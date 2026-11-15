@@ -7,6 +7,8 @@ export const tabsStyles = stylex.create({
     position: "relative",
     display: "flex",
     overflowX: "auto",
+    scrollbarWidth: "thin",
+    scrollbarColor: "var(--scrollbar-thumb) var(--scrollbar-track)",
     backgroundColor: tokens.surface,
     borderBottomWidth: 1,
     borderBottomStyle: "solid",
@@ -84,7 +86,10 @@ export const tabsStyles = stylex.create({
     bottom: 0,
     height: 2,
     pointerEvents: "none",
-    backgroundColor: tokens.primary,
+    backgroundColor: {
+      default: tokens.primary,
+      "@media (forced-colors: active)": "Highlight",
+    },
   },
   primaryIndicator: {
     height: 3,

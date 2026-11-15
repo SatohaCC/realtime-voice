@@ -2,7 +2,7 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { type CSSProperties, type ReactNode, useEffect, useId, useRef, useState } from "react";
-import { Button } from "@/shared/ui/button/Button";
+import { IconButton } from "@/shared/ui";
 import { headerStyles } from "./Header.styles";
 
 export interface HeaderNavItem {
@@ -146,10 +146,10 @@ export function Header({
               }}
               {...stylex.props(headerStyles.nav)}
             >
-              <Button
+              <IconButton
                 ref={menuButtonRef}
-                variant="text"
-                size="sm"
+                variant="standard"
+                size="md"
                 aria-label={menuButtonLabel}
                 aria-expanded={isMenuOpen}
                 aria-controls={menuId}
@@ -157,7 +157,7 @@ export function Header({
                 style={headerStyles.menuButton}
               >
                 <MenuIcon isOpen={isMenuOpen} />
-              </Button>
+              </IconButton>
 
               <ul
                 id={menuId}

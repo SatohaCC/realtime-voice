@@ -30,6 +30,12 @@ export const segmentedControlStyles = stylex.create({
     height: "var(--segmented-control-indicator-height, 0px)",
     borderRadius: tokens.cornerFull,
     backgroundColor: tokens.secondaryContainer,
+    boxShadow: `inset 0 0 0 1px ${tokens.outline}`,
+    outline: {
+      default: "none",
+      "@media (forced-colors: active)": "2px solid Highlight",
+    },
+    outlineOffset: -2,
     pointerEvents: "none",
     transitionProperty: "left, top, width, height",
     transitionDuration: tokens.motionDuration,

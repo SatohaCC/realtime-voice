@@ -16,7 +16,12 @@ test("トップページは公開維持され、保護された文字起こし�
   await expect(page).toHaveURL(/\/login\?next=%2Ftranscription/);
   await expect(page.getByRole("heading", { name: "ログイン" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Google でログイン" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Discord でログイン" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /でログイン$/ })).toHaveCount(1);
+  const googleButton = page.getByRole("button", { name: "Google でログイン" });
+  await expect(googleButton).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await expect(googleButton).toHaveCSS("color", "rgb(31, 31, 31)");
+  await expect(googleButton.locator("img")).toHaveAttribute("src", "/identity/google-g.png");
+  await expect(googleButton.locator("img")).toBeVisible();
 });
 
 test("ログイン画面は狭い画面とダークテーマでも崩れず、キーボードで操作できる", async ({ page }) => {

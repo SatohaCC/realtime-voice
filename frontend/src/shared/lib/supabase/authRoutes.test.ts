@@ -44,6 +44,7 @@ describe("supabase auth config helpers", () => {
   it("許可したアプリ内パスだけを返し、外部URLや迂回記法を拒否する", () => {
     expect(sanitizeRedirectPath("/transcription")).toBe("/transcription");
     expect(sanitizeRedirectPath("/transcription?mode=dual")).toBe("/transcription?mode=dual");
+    expect(sanitizeRedirectPath("/user")).toBe("/user");
     expect(sanitizeRedirectPath("/")).toBe("/");
     expect(sanitizeRedirectPath("https://evil.example/phish")).toBe("/transcription");
     expect(sanitizeRedirectPath("//evil.example")).toBe("/transcription");
@@ -109,6 +110,17 @@ describe("handleAuthProxy", () => {
     );
     expect(protectedRes.headers.get("cache-control")).toContain("no-store");
     expect(protectedRes.cookies.get("sb-refreshed")?.value).toBe("cleared");
+
+    const protectedUserRes = await handleAuthProxy(
+      new NextRequest("http://localhost:3000/user", {
+        headers: { cookie: "sb-fake=tampered" },
+      }),
+      clientFactory,
+    );
+    expect(protectedUserRes.status).toBe(307);
+    expect(protectedUserRes.headers.get("location")).toBe(
+      "http://localhost:3000/login?next=%2Fuser",
+    );
 
     const publicRes = await handleAuthProxy(
       new NextRequest("http://localhost:3000/"),

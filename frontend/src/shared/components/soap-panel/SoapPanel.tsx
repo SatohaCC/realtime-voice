@@ -2,9 +2,7 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { useState } from "react";
-import { Badge, type BadgeProps } from "@/shared/ui/badge/Badge";
-import { Button } from "@/shared/ui/button/Button";
-import { Card } from "@/shared/ui/card/Card";
+import { Badge, type BadgeProps, Banner, Button, Card } from "@/shared/ui";
 import { soapPanelStyles as s } from "./SoapPanel.styles";
 
 export interface SoapEvidenceView {
@@ -86,12 +84,10 @@ export function SoapPanel({
   };
 
   return (
-    <section aria-labelledby="soap-panel-heading" {...stylex.props(s.root)}>
+    <div {...stylex.props(s.root)}>
       <div data-pane-header {...stylex.props(s.header)}>
         <div {...stylex.props(s.titleGroup)}>
-          <h2 id="soap-panel-heading" {...stylex.props(s.title)}>
-            {title}
-          </h2>
+          <h2 {...stylex.props(s.title)}>{title}</h2>
           <Badge tone={statusBadgeTone}>{statusBadgeText}</Badge>
           {unappliedBadgeText ? <Badge tone="danger">{unappliedBadgeText}</Badge> : null}
         </div>
@@ -104,15 +100,23 @@ export function SoapPanel({
       </div>
 
       {statusBannerText ? (
-        <div
+        <Banner
+          tone={statusBannerTone === "error" ? "danger" : "info"}
+          size="sm"
           role={statusBannerTone === "error" ? "alert" : "status"}
-          {...stylex.props(statusBannerTone === "error" ? s.statusBannerError : s.statusBannerInfo)}
+          style={s.statusBanner}
         >
           {statusBannerText}
-        </div>
+        </Banner>
       ) : null}
 
-      <div data-testid="soap-panel-scroller" {...stylex.props(s.scroller)}>
+      <section
+        aria-label={title}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: 根拠ボタンが無い状態でもキーボードでスクロールできるようにするため
+        tabIndex={0}
+        data-testid="soap-panel-scroller"
+        {...stylex.props(s.scroller)}
+      >
         {sections.map((section) => (
           <Card
             key={section.key}
@@ -199,7 +203,7 @@ export function SoapPanel({
             )}
           </Card>
         ))}
-      </div>
-    </section>
+      </section>
+    </div>
   );
 }

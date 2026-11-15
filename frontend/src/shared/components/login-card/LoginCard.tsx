@@ -1,8 +1,8 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { Button } from "@/shared/ui/button/Button";
-import { Card } from "@/shared/ui/card/Card";
+import { Fragment, type ReactNode } from "react";
+import { Banner, Button, Card } from "@/shared/ui";
 import { loginCardStyles as s } from "./LoginCard.styles";
 
 export interface LoginProviderOption {
@@ -33,6 +33,13 @@ export interface LoginCardProps {
   onRetry?: () => void;
   /** 補足テキスト */
   footerNote?: string;
+  /** ブランド規定のある認証ボタンを外から注入する。 */
+  renderProviderButton?: (props: {
+    provider: LoginProviderOption;
+    disabled: boolean;
+    isPending: boolean;
+    onClick: () => void;
+  }) => ReactNode;
 }
 
 /**
@@ -48,6 +55,7 @@ export function LoginCard({
   onSelectProvider,
   onRetry,
   footerNote,
+  renderProviderButton,
 }: LoginCardProps) {
   const isBusy = pendingProviderId !== null;
 
@@ -59,19 +67,37 @@ export function LoginCard({
       </div>
 
       {errorMessage ? (
-        <div role="alert" {...stylex.props(s.errorBox)}>
+        <Banner
+          tone="danger"
+          role="alert"
+          style={s.errorBanner}
+          actions={
+            retryLabel && onRetry ? (
+              <Button variant="outlined" size="sm" onClick={onRetry} disabled={isBusy}>
+                {retryLabel}
+              </Button>
+            ) : undefined
+          }
+        >
           <p {...stylex.props(s.errorText)}>{errorMessage}</p>
-          {retryLabel && onRetry ? (
-            <Button variant="outlined" size="sm" onClick={onRetry} disabled={isBusy}>
-              {retryLabel}
-            </Button>
-          ) : null}
-        </div>
+        </Banner>
       ) : null}
 
       <div {...stylex.props(s.actions)}>
         {providers.map((provider, index) => {
           const isPending = pendingProviderId === provider.id;
+          if (renderProviderButton) {
+            return (
+              <Fragment key={provider.id}>
+                {renderProviderButton({
+                  provider,
+                  disabled: isBusy,
+                  isPending,
+                  onClick: () => onSelectProvider(provider.id),
+                })}
+              </Fragment>
+            );
+          }
           return (
             <Button
               key={provider.id}

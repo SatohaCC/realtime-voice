@@ -4,14 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDualMicAudio } from "@/features/audio/useDualMicAudio";
 import type { AudioCaptureFrame } from "@/shared/lib/audio/dualMicCapture";
 import {
-  applyConversationSegmentDeleted,
+  applyConversationSegmentEnabled,
   applyConversationWsEvent,
   type ConversationWorkspaceState,
   clearSoapHighlights,
   createInitialConversationState,
   prepareStreamReconnect,
 } from "@/shared/lib/conversation/conversationReducer";
-import type { SoapNote, SpeakerRole } from "@/shared/lib/conversation/types";
+import { readSegmentEnabledUpdates } from "@/shared/lib/conversation/segmentEnabledUpdates";
+import type { SpeakerRole } from "@/shared/lib/conversation/types";
 import { getValidAccessToken, subscribeAuthState } from "@/shared/lib/supabase/client";
 import { AudioLevelHistory } from "@/shared/lib/transcription/audioLevelHistory";
 import {
@@ -22,7 +23,7 @@ import {
 import {
   applyDeepgramTranscriptEvent,
   createInitialTranscriptState,
-  removeTranscriptSegment,
+  setTranscriptSegmentEnabled,
   startTranscriptSession,
 } from "@/shared/lib/transcription/transcriptReducer";
 
@@ -67,6 +68,11 @@ export function useRealtimeTranscription({
   const [phase, setPhase] = useState<Phase | "idle">("idle");
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const runRef = useRef<TranscriptionRun | null>(null);
+  const [isSegmentUpdatePending, setIsSegmentUpdatePending] = useState(false);
+  const segmentUpdateRef = useRef<symbol | null>(null);
+  const latestSegmentUpdateRef = useRef(new Map<string, symbol>());
+  const conversationStateRef = useRef(conversationState);
+  conversationStateRef.current = conversationState;
   const conversationIdRef = useRef<string>("conv-initial");
   const onAuthInvalidatedRef = useRef(onAuthInvalidated);
   onAuthInvalidatedRef.current = onAuthInvalidated;
@@ -175,7 +181,7 @@ export function useRealtimeTranscription({
   );
 
   const startTranscription = useCallback(async () => {
-    if (runRef.current) return;
+    if (runRef.current || segmentUpdateRef.current) return;
     if (audio.hasDuplicateDevices) {
       setTranscriptionError(
         "患者用と薬剤師用に同じデバイスは指定できません。別のマイクを選ぶか「1マイク」へ切り替えてください。",
@@ -340,58 +346,119 @@ export function useRealtimeTranscription({
     [],
   );
 
-  const deleteSegment = useCallback(
-    (streamId: string, segmentId: string) => {
+  const setSegmentEnabled = useCallback(
+    (streamId: string, segmentId: string, enabled: boolean) => {
       if (audio.mode === "single") {
-        setTranscriptState((current) => removeTranscriptSegment(current, segmentId));
+        setTranscriptState((current) => setTranscriptSegmentEnabled(current, segmentId, enabled));
         return;
       }
       const run = runRef.current;
       if (run && !run.invalidated && run.phase === "streaming") {
-        run.session?.deleteSegment(streamId, segmentId);
+        run.session?.setSegmentEnabled(streamId, segmentId, enabled);
         return;
       }
-      if (run) {
-        return;
-      }
+      if (run || segmentUpdateRef.current) return;
       const targetConvId = conversationIdRef.current;
-      setConversationState((current) =>
-        applyConversationSegmentDeleted(current, { streamId, segmentId }),
+      const original = conversationStateRef.current.segments.find(
+        (segment) => segment.stream_id === streamId && segment.segment_id === segmentId,
       );
+      if (!original) return;
+      const requestId = Symbol();
+      const requestKey = `${targetConvId}:${streamId}:${segmentId}`;
+      latestSegmentUpdateRef.current.set(requestKey, requestId);
+      segmentUpdateRef.current = requestId;
+      let applied = false;
+      setConversationState((current) =>
+        current.conversationId !== targetConvId
+          ? current
+          : {
+              ...current,
+              segments: current.segments.map((segment) =>
+                segment.stream_id === streamId && segment.segment_id === segmentId
+                  ? { ...segment, disabled: !enabled }
+                  : segment,
+              ),
+            },
+      );
+      setIsSegmentUpdatePending(true);
+      setTranscriptionError(null);
       void (async () => {
         try {
-          const accessToken = await getValidAccessToken();
-          if (!accessToken || conversationIdRef.current !== targetConvId) return;
-          const params = new URLSearchParams({
-            stream_id: streamId,
-            segment_id: segmentId,
-          });
+          const token = await getValidAccessToken();
+          if (conversationIdRef.current !== targetConvId) return;
+          if (!token) throw new Error("発話の有効性を変更するにはログインが必要です。");
           const res = await fetch(
-            `/api/transcriptions/conversations/${encodeURIComponent(targetConvId)}/segments?${params.toString()}`,
+            `/api/transcriptions/conversations/${encodeURIComponent(targetConvId)}/segments?stream=true`,
             {
-              method: "DELETE",
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-              },
+              method: "PATCH",
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                type: "SetSegmentEnabled",
+                stream_id: streamId,
+                segment_id: segmentId,
+                enabled,
+              }),
             },
           );
-          if (!res.ok || conversationIdRef.current !== targetConvId) return;
-          const data = (await res.json()) as {
-            soap?: SoapNote;
-            changed_item_ids?: string[];
-          };
-          if (data.soap) {
+          if (conversationIdRef.current !== targetConvId) return;
+          if (!res.ok)
+            throw new Error("発話の有効性を変更できませんでした。もう一度お試しください。");
+          await readSegmentEnabledUpdates(res, (data) => {
+            if (segmentUpdateRef.current === requestId) {
+              segmentUpdateRef.current = null;
+              setIsSegmentUpdatePending(false);
+            }
+            if (
+              conversationIdRef.current !== targetConvId ||
+              latestSegmentUpdateRef.current.get(requestKey) !== requestId
+            )
+              return;
+            applied = true;
             setConversationState((current) =>
-              applyConversationSegmentDeleted(current, {
-                streamId,
-                segmentId,
+              applyConversationSegmentEnabled(current, {
+                conversationId: data.conversation_id,
+                segment: data.segment,
                 soap: data.soap,
                 changedItemIds: data.changed_item_ids,
+                soapStatus: data.soap_status,
+                hasUnappliedTranscript: data.has_unapplied_transcript,
               }),
             );
+          });
+        } catch (err) {
+          if (
+            conversationIdRef.current === targetConvId &&
+            latestSegmentUpdateRef.current.get(requestKey) === requestId
+          ) {
+            if (!applied) {
+              setConversationState((current) =>
+                current.conversationId !== targetConvId
+                  ? current
+                  : {
+                      ...current,
+                      segments: current.segments.map((segment) =>
+                        segment.stream_id === streamId &&
+                        segment.segment_id === segmentId &&
+                        segment.segment_revision === original.segment_revision
+                          ? { ...segment, disabled: original.disabled }
+                          : segment,
+                      ),
+                    },
+              );
+            }
+            setTranscriptionError(
+              applied
+                ? "発話の変更は反映しましたが、SOAPの更新を取得できませんでした。"
+                : err instanceof Error
+                  ? err.message
+                  : "発話の有効性を変更できませんでした。",
+            );
           }
-        } catch {
-          // サーバー上の会話期限切れやオフライン時はローカル削除状態をそのまま維持する
+        } finally {
+          if (segmentUpdateRef.current === requestId) {
+            segmentUpdateRef.current = null;
+            setIsSegmentUpdatePending(false);
+          }
         }
       })();
     },
@@ -400,6 +467,7 @@ export function useRealtimeTranscription({
 
   return {
     audio,
+    isSegmentUpdatePending,
     segments: transcriptState.segments,
     conversation: conversationState,
     isConnecting: phase === "connecting",
@@ -410,6 +478,6 @@ export function useRealtimeTranscription({
     clearTranscripts,
     startNewConversation,
     updateSegmentSpeaker,
-    deleteSegment,
+    setSegmentEnabled,
   };
 }

@@ -67,8 +67,14 @@ describe("DualMicPanel", () => {
       />,
     );
 
-    expect(screen.getByRole("meter", { name: "マイク 1 入力レベル" })).toHaveValue(42);
-    expect(screen.getByRole("meter", { name: "マイク 2 入力レベル" })).toHaveValue(5);
+    expect(screen.getByRole("meter", { name: "マイク 1 入力レベル" })).toHaveAttribute(
+      "aria-valuenow",
+      "42",
+    );
+    expect(screen.getByRole("meter", { name: "マイク 2 入力レベル" })).toHaveAttribute(
+      "aria-valuenow",
+      "5",
+    );
 
     await user.click(screen.getByRole("radio", { name: "1マイク" }));
     expect(onModeChange).toHaveBeenCalledWith("single");

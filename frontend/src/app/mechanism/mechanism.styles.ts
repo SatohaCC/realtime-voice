@@ -203,6 +203,8 @@ export const mechanismStyles = stylex.create({
   tableWrap: {
     width: "100%",
     overflowX: "auto",
+    scrollbarWidth: "auto",
+    scrollbarColor: "var(--scrollbar-thumb) var(--scrollbar-track)",
     borderRadius: tokens.cornerLarge,
     borderWidth: 1,
     borderStyle: "solid",

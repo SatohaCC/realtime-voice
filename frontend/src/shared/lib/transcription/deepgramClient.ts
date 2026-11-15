@@ -50,7 +50,7 @@ export interface DeepgramStreamSession {
     segmentId: string,
     speakerRole: "pharmacist" | "patient" | "unknown",
   ) => void;
-  deleteSegment: (streamId: string, segmentId: string) => void;
+  setSegmentEnabled: (streamId: string, segmentId: string, enabled: boolean) => void;
   close: () => Promise<void>;
 }
 
@@ -343,11 +343,12 @@ export function createDeepgramStreamSession({
           }),
         );
       },
-      deleteSegment: (streamId, segmentId) => {
+      setSegmentEnabled: (streamId, segmentId, enabled) => {
         if (!settled || closing || socket.readyState !== WebSocket.OPEN) return;
         socket.send(
           JSON.stringify({
-            type: "DeleteSegment",
+            type: "SetSegmentEnabled",
+            enabled,
             stream_id: streamId,
             segment_id: segmentId,
           }),

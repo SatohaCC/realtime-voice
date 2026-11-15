@@ -1,10 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { useState } from "react";
-import type { SoapPanelSectionView } from "@/shared/components/soap-panel/SoapPanel";
 import type {
+  SoapPanelSectionView,
   TranscriptChatSegment,
   TranscriptSpeakerRole,
-} from "@/shared/components/transcript-chat/TranscriptChat";
+} from "@/shared/components";
 import {
   TranscriptionWorkspaceView,
   type TranscriptionWorkspaceViewProps,
@@ -211,7 +211,6 @@ function InteractiveWorkspaceHarness(props: Partial<TranscriptionWorkspaceViewPr
         speakerOptions: [
           { value: "pharmacist", label: "薬剤師" },
           { value: "patient", label: "患者" },
-          { value: "unknown", label: "話者不明" },
         ],
         getSpeakerSelectLabel: ({ timeLabel }) => `${timeLabel} の話者を変更`,
         onChangeSegmentSpeaker: (streamId, segmentId, speakerRole) => {
@@ -228,10 +227,15 @@ function InteractiveWorkspaceHarness(props: Partial<TranscriptionWorkspaceViewPr
             ),
           );
         },
-        getDeleteSegmentLabel: ({ timeLabel, text }) => `${timeLabel} の発話「${text}」を削除`,
-        onDeleteSegment: (streamId, segmentId) => {
+        getSegmentToggleLabel: ({ timeLabel, text, disabled }) =>
+          `${timeLabel} の発話「${text}」を${disabled ? "有効に戻す" : "無効化"}`,
+        onSetSegmentEnabled: (streamId, segmentId, enabled) => {
           setSegments((prev) =>
-            prev.filter((seg) => !(seg.streamId === streamId && seg.segmentId === segmentId)),
+            prev.map((seg) =>
+              seg.streamId === streamId && seg.segmentId === segmentId
+                ? { ...seg, disabled: !enabled }
+                : seg,
+            ),
           );
         },
         ...props.transcriptChat,

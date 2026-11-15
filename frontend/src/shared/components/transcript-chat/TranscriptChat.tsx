@@ -2,8 +2,7 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Badge } from "@/shared/ui/badge/Badge";
-import { Select } from "@/shared/ui/select/Select";
+import { Badge, Button, IconButton, Select } from "@/shared/ui";
 import { transcriptChatStyles as s } from "./TranscriptChat.styles";
 
 export type TranscriptSpeakerRole = "pharmacist" | "patient" | "unknown";
@@ -25,6 +24,7 @@ export interface TranscriptChatSegment {
   text: string;
   status: "interim" | "final" | "refined";
   statusLabel: string;
+  disabled?: boolean;
 }
 
 export interface TranscriptChatProps {
@@ -41,8 +41,13 @@ export interface TranscriptChatProps {
     segmentId: string,
     speakerRole: TranscriptSpeakerRole,
   ) => void;
-  getDeleteSegmentLabel?: (segment: { timeLabel: string; text: string }) => string;
-  onDeleteSegment?: (streamId: string, segmentId: string) => void;
+  getSegmentToggleLabel?: (segment: {
+    timeLabel: string;
+    text: string;
+    disabled: boolean;
+  }) => string;
+  onSetSegmentEnabled?: (streamId: string, segmentId: string, enabled: boolean) => void;
+  segmentActionsDisabled?: boolean;
 }
 
 interface GroupedTurn {
@@ -122,10 +127,11 @@ export function TranscriptChat({
   speakerOptions,
   getSpeakerSelectLabel,
   onChangeSegmentSpeaker,
-  getDeleteSegmentLabel,
-  onDeleteSegment,
+  getSegmentToggleLabel,
+  onSetSegmentEnabled,
+  segmentActionsDisabled = false,
 }: TranscriptChatProps) {
-  const scrollerRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLElement>(null);
   const segmentRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
   const isAtBottomRef = useRef(true);
   const [hasUnreadBelow, setHasUnreadBelow] = useState(false);
@@ -184,19 +190,19 @@ export function TranscriptChat({
   }, []);
 
   return (
-    <section aria-labelledby="transcript-chat-heading" {...stylex.props(s.root)}>
+    <div {...stylex.props(s.root)}>
       <div data-pane-header {...stylex.props(s.header)}>
         <div {...stylex.props(s.titleGroup)}>
-          <h2 id="transcript-chat-heading" {...stylex.props(s.title)}>
-            {title}
-          </h2>
+          <h2 {...stylex.props(s.title)}>{title}</h2>
           {countLabel ? <Badge tone="neutral">{countLabel}</Badge> : null}
         </div>
       </div>
 
       <div {...stylex.props(s.scrollerWrap)}>
-        <div
+        <section
           ref={scrollerRef}
+          aria-label={title}
+          tabIndex={turns.length > 0 ? 0 : undefined}
           onScroll={handleScroll}
           data-testid="transcript-chat-scroller"
           {...stylex.props(s.scroller)}
@@ -243,6 +249,7 @@ export function TranscriptChat({
                           }
                           options={speakerOptions}
                           value={turn.speakerRole}
+                          disabled={segmentActionsDisabled}
                           onValueChange={(nextValue) => {
                             if (!nextValue || !onChangeSegmentSpeaker) return;
                             const nextRole = nextValue as TranscriptSpeakerRole;
@@ -273,8 +280,8 @@ export function TranscriptChat({
                         {turn.items.map((segment) => {
                           const segKey = `${segment.streamId}:${segment.segmentId}`;
                           const isHighlighted = highlightedSegmentKey === segKey;
-                          const canDeleteSegment =
-                            Boolean(onDeleteSegment) && segment.status !== "interim";
+                          const canSetSegmentEnabled =
+                            Boolean(onSetSegmentEnabled) && segment.status !== "interim";
                           return (
                             <div key={segKey} {...stylex.props(s.segmentRow)}>
                               <span
@@ -286,28 +293,37 @@ export function TranscriptChat({
                                   }
                                 }}
                                 data-segment-key={segKey}
+                                data-disabled={segment.disabled ? "true" : undefined}
                                 data-highlighted={isHighlighted ? "true" : undefined}
                                 {...stylex.props(
                                   s.segmentText,
                                   segment.status === "interim" && s.segmentTextInterim,
+                                  segment.disabled && s.segmentTextDisabled,
                                   isHighlighted && s.segmentTextHighlighted,
                                 )}
                               >
-                                {segment.text}
+                                {segment.disabled ? <s>{segment.text}</s> : segment.text}
                               </span>
-                              {canDeleteSegment && onDeleteSegment ? (
-                                <button
-                                  type="button"
+                              {canSetSegmentEnabled && onSetSegmentEnabled ? (
+                                <IconButton
+                                  variant="standard"
+                                  size="sm"
+                                  disabled={segmentActionsDisabled}
+                                  pressed={Boolean(segment.disabled)}
                                   aria-label={
-                                    getDeleteSegmentLabel?.({
+                                    getSegmentToggleLabel?.({
                                       timeLabel: segment.timeLabel,
                                       text: segment.text,
+                                      disabled: Boolean(segment.disabled),
                                     }) ?? `${segment.timeLabel} ${segment.text}`
                                   }
                                   onClick={() =>
-                                    onDeleteSegment(segment.streamId, segment.segmentId)
+                                    onSetSegmentEnabled(
+                                      segment.streamId,
+                                      segment.segmentId,
+                                      Boolean(segment.disabled),
+                                    )
                                   }
-                                  {...stylex.props(s.deleteSegmentButton)}
                                 >
                                   <svg
                                     width="14"
@@ -317,14 +333,18 @@ export function TranscriptChat({
                                     aria-hidden="true"
                                   >
                                     <path
-                                      d="M18 6L6 18M6 6L18 18"
+                                      d={
+                                        segment.disabled
+                                          ? "M3 10h11a6 6 0 0 1 0 12M3 10l6-6M3 10l6 6"
+                                          : "M5 12h14"
+                                      }
                                       stroke="currentColor"
                                       strokeWidth="2"
                                       strokeLinecap="round"
                                       strokeLinejoin="round"
                                     />
                                   </svg>
-                                </button>
+                                </IconButton>
                               ) : null}
                             </div>
                           );
@@ -336,16 +356,16 @@ export function TranscriptChat({
               })}
             </ul>
           )}
-        </div>
+        </section>
 
         {hasUnreadBelow ? (
           <div {...stylex.props(s.jumpBannerWrap)}>
-            <button type="button" onClick={scrollToBottom} {...stylex.props(s.jumpButton)}>
+            <Button variant="filled" size="sm" onClick={scrollToBottom} style={s.jumpButton}>
               {scrollToBottomLabel}
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>
-    </section>
+    </div>
   );
 }

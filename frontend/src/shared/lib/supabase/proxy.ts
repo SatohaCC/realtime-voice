@@ -55,7 +55,11 @@ export async function handleAuthProxy(
   });
 
   const pathname = request.nextUrl.pathname;
-  const isProtectedPath = pathname === "/transcription" || pathname.startsWith("/transcription/");
+  const isProtectedPath =
+    pathname === "/transcription" ||
+    pathname.startsWith("/transcription/") ||
+    pathname === "/user" ||
+    pathname.startsWith("/user/");
   const isLoginPath = pathname === "/login";
   const isAuthPath = pathname.startsWith("/auth/");
 

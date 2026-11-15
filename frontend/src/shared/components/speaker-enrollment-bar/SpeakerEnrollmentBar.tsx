@@ -1,8 +1,7 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { Badge, type BadgeProps } from "@/shared/ui/badge/Badge";
-import { Button } from "@/shared/ui/button/Button";
+import { Badge, type BadgeProps, Banner, Button, Progress } from "@/shared/ui";
 import { speakerEnrollmentBarStyles as s } from "./SpeakerEnrollmentBar.styles";
 
 export interface SpeakerEnrollmentBarProps {
@@ -77,19 +76,28 @@ export function SpeakerEnrollmentBar({
       </div>
 
       {isEnrolling ? (
-        <div {...stylex.props(s.progressWrap)}>
-          <div {...stylex.props(s.progressTrack)}>
-            <div {...stylex.props(s.progressFill)} style={{ width: `${clampedPercent}%` }} />
-          </div>
-          {progressLabel ? <span {...stylex.props(s.progressText)}>{progressLabel}</span> : null}
-        </div>
+        <Progress
+          label={title}
+          hideLabel
+          value={clampedPercent}
+          showValue={Boolean(progressLabel)}
+          valueText={progressLabel}
+          layout="inline"
+          size="sm"
+        />
       ) : null}
 
       {warningMessages.length > 0 ? (
-        <div {...stylex.props(s.warningBox)}>{warningMessages.join(" ")}</div>
+        <Banner tone="info" size="sm">
+          {warningMessages.join(" ")}
+        </Banner>
       ) : null}
 
-      {errorMessage ? <div {...stylex.props(s.errorBox)}>{errorMessage}</div> : null}
+      {errorMessage ? (
+        <Banner tone="danger" size="sm" role="alert">
+          {errorMessage}
+        </Banner>
+      ) : null}
     </section>
   );
 }

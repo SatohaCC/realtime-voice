@@ -1,7 +1,6 @@
 import * as stylex from "@stylexjs/stylex";
 import Link from "next/link";
-import { Badge } from "@/shared/ui/badge/Badge";
-import { Card } from "@/shared/ui/card/Card";
+import { Badge, Card } from "@/shared/ui";
 import { pageStyles as s } from "./page.styles";
 
 const FEATURES = [
@@ -10,7 +9,7 @@ const FEATURES = [
     tone: "success" as const,
     title: "2マイクで患者・薬剤師を自動振り分け",
     description:
-      "患者用マイク（左）と薬剤師用マイク（右）の音声を 16kHz PCM で取得し、チャンネル別 RMS 音量と回り込み抑止によってチャット左右へ自動分離します。1マイクでの文字起こしにも対応します。",
+      "患者用・薬剤師用の音声を 16kHz PCM で取得し、登録した薬剤師声紋と会話中の患者声紋、マイク間の音量差を使って話者を判定します。不確かな発話は患者側へ表示し、後から手動訂正できます。1マイクでは文字起こしのみ利用できます。",
   },
   {
     badge: "10〜15秒更新",
@@ -38,9 +37,9 @@ const FEATURES = [
 const WORKFLOW_STEPS = [
   {
     step: "1",
-    title: "マイクを選び、収音を開始",
+    title: "声紋を登録し、マイクを選んで開始",
     description:
-      "文字起こしページで患者用・薬剤師用のマイクを指定して開始します（利用にはログインが必要です）。",
+      "ログイン後、ユーザー設定で薬剤師声紋を端末ローカルへ登録します。文字起こしページで患者用・薬剤師用のマイクを指定して開始します。",
   },
   {
     step: "2",
@@ -77,6 +76,9 @@ export default function HomePage() {
             </Link>
             <Link href="/mechanism" {...stylex.props(s.secondaryCta)}>
               仕組みを見る
+            </Link>
+            <Link href="/user" {...stylex.props(s.secondaryCta)}>
+              ユーザー設定で声紋登録
             </Link>
           </div>
         </div>

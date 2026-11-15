@@ -20,7 +20,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     <html lang="ja">
       <body {...stylex.props(layoutStyles.body)}>
         <QueryProvider>
-          <AppHeader initialUser={user} />
+          <AppHeader initialAuthenticated={Boolean(user)} />
           {children}
         </QueryProvider>
       </body>

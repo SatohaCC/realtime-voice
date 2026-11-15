@@ -19,6 +19,7 @@ export interface TranscriptSegment {
   end_sec: number;
   confidence: number;
   speech_final?: boolean;
+  disabled?: boolean;
 }
 
 export interface SoapEvidence {

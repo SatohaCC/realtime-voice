@@ -23,20 +23,36 @@ describe("AppHeader", () => {
     mocks.push.mockReset();
   });
 
-  it("ヘッダーにホーム・文字起こし・仕組みの3リンクのみを描画し、現在地を示す", () => {
+  it("ヘッダーにホーム・文字起こし・仕組み・ユーザーの4リンクを描画し、現在地を示す", () => {
     mocks.pathname = "/mechanism";
-    render(<AppHeader initialUser={null} />);
+    render(<AppHeader initialAuthenticated={false} />);
 
     const nav = screen.getByRole("navigation", { name: "メインナビゲーション" });
     const links = Array.from(nav.querySelectorAll("a"));
-    expect(links.map((el) => el.textContent)).toEqual(["ホーム", "文字起こし", "仕組み"]);
+    expect(links.map((el) => el.textContent)).toEqual([
+      "ホーム",
+      "文字起こし",
+      "仕組み",
+      "ユーザー",
+    ]);
     expect(screen.getByRole("link", { name: "ホーム" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("link", { name: "文字起こし" })).toHaveAttribute(
       "href",
       "/transcription",
     );
     expect(screen.getByRole("link", { name: "仕組み" })).toHaveAttribute("href", "/mechanism");
+    expect(screen.getByRole("link", { name: "ユーザー" })).toHaveAttribute("href", "/user");
     expect(screen.getByRole("link", { name: "仕組み" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "ホーム" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "ログイン" })).toBeInTheDocument();
+  });
+
+  it("ユーザーページではユーザーリンクに現在地を示し、ログイン中でもメールアドレスを表示しない", () => {
+    mocks.pathname = "/user";
+    render(<AppHeader initialAuthenticated />);
+
+    expect(screen.getByRole("link", { name: "ユーザー" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "ログアウト" })).toBeInTheDocument();
+    expect(screen.queryByText(/@/)).not.toBeInTheDocument();
   });
 });

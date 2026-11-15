@@ -2,9 +2,7 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef } from "react";
-import { Badge } from "@/shared/ui/badge/Badge";
-import { Button } from "@/shared/ui/button/Button";
-import { Card } from "@/shared/ui/card/Card";
+import { Badge, Button, Card } from "@/shared/ui";
 import { transcriptFeedStyles as s } from "./TranscriptFeed.styles";
 
 export interface TranscriptFeedItem {
@@ -65,7 +63,13 @@ export function TranscriptFeed({
       {segments.length === 0 ? (
         <p {...stylex.props(s.empty)}>{emptyMessage}</p>
       ) : (
-        <ul ref={listRef} aria-label={title} {...stylex.props(s.list)}>
+        <ul
+          ref={listRef}
+          aria-label={title}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: 内部にフォーカス可能要素が無いためキーボードでスクロールできるようにする
+          tabIndex={0}
+          {...stylex.props(s.list)}
+        >
           {segments.map((segment) => {
             const isInterim = segment.status === "interim";
             const badgeTone =

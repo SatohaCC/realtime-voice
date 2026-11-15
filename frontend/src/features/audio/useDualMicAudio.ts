@@ -3,14 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type AudioCaptureFrame,
-  type AudioInputDeviceInfo,
   type CaptureDevices,
   createDualMicCapture,
   type DualMicCaptureSession,
   detectSpeakingChannels,
-  listAudioInputDevices,
   resolveCaptureDevices,
 } from "@/shared/lib/audio/dualMicCapture";
+import { useAudioInputDevices } from "./useAudioInputDevices";
 
 export type MicCaptureMode = "single" | "dual";
 
@@ -23,7 +22,6 @@ export interface UseDualMicAudioOptions {
  * 1本または2本のマイクからの AudioWorklet 収音とデバイス一覧・音量レベルを管理する Hook。
  */
 export function useDualMicAudio(options?: UseDualMicAudioOptions) {
-  const [devices, setDevices] = useState<AudioInputDeviceInfo[]>([]);
   const [mode, setMode] = useState<MicCaptureMode>("dual");
   const [mic1DeviceId, setMic1DeviceId] = useState("");
   const [mic2DeviceId, setMic2DeviceId] = useState("");
@@ -37,10 +35,8 @@ export function useDualMicAudio(options?: UseDualMicAudioOptions) {
   const onAudioFrameRef = useRef(options?.onAudioFrame);
   onAudioFrameRef.current = options?.onAudioFrame;
 
-  const refreshDevices = useCallback(async () => {
-    try {
-      const list = await listAudioInputDevices();
-      setDevices(list);
+  const { devices, refreshDevices } = useAudioInputDevices({
+    onDevicesLoaded: (list) => {
       setMic1DeviceId((current) => {
         if (current && list.some((device) => device.deviceId === current)) {
           return current;
@@ -53,26 +49,9 @@ export function useDualMicAudio(options?: UseDualMicAudioOptions) {
         }
         return list[1]?.deviceId ?? list[0]?.deviceId ?? "";
       });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "マイク一覧の取得に失敗しました。");
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshDevices();
-
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.addEventListener) {
-      return;
-    }
-
-    const handleDeviceChange = () => {
-      void refreshDevices();
-    };
-    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
-    return () => {
-      navigator.mediaDevices.removeEventListener("devicechange", handleDeviceChange);
-    };
-  }, [refreshDevices]);
+    },
+    onError: setError,
+  });
 
   const stopCapture = useCallback(async () => {
     const controller = captureRunRef.current;

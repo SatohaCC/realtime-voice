@@ -245,71 +245,39 @@ export function applyConversationWsEvent(
   }
 }
 
-/**
- * 発話削除後の会話状態・SOAP 根拠整合を反映する（サーバー再整合後の SOAP があれば優先）。
- */
-export function applyConversationSegmentDeleted(
+/** サーバーが確認した有効性変更を、同じ会話の最新状態にだけ反映する。 */
+export function applyConversationSegmentEnabled(
   state: ConversationWorkspaceState,
   payload: {
-    streamId: string;
-    segmentId: string;
-    soap?: SoapNote;
+    conversationId: string;
+    segment: TranscriptSegment;
+    soap: SoapNote;
+    soapStatus?: SoapLifecycleStatus;
+    hasUnappliedTranscript?: boolean;
     changedItemIds?: readonly string[];
   },
 ): ConversationWorkspaceState {
-  const nextSegments = state.segments.filter(
-    (seg) => !(seg.stream_id === payload.streamId && seg.segment_id === payload.segmentId),
-  );
-  if (payload.soap) {
-    return {
-      ...state,
-      segments: nextSegments,
-      soap: payload.soap.revision >= state.soap.revision ? payload.soap : state.soap,
-      changedItemIds: payload.changedItemIds ?? state.changedItemIds,
-    };
-  }
-  if (nextSegments.length === state.segments.length) {
+  if (
+    payload.conversationId !== state.conversationId ||
+    payload.soap.conversation_id !== state.conversationId
+  )
     return state;
-  }
-
-  let soapChanged = false;
-  const pruneSection = <T extends { items: readonly SoapNote["sections"]["S"]["items"][number][] }>(
-    section: T,
-  ): T => {
-    const nextItems = [];
-    for (const item of section.items) {
-      const nextEvidence = item.evidence.filter(
-        (ev) => !(ev.stream_id === payload.streamId && ev.segment_id === payload.segmentId),
-      );
-      if (nextEvidence.length === item.evidence.length) {
-        nextItems.push(item);
-        continue;
-      }
-      soapChanged = true;
-      if (nextEvidence.length === 0) {
-        continue;
-      }
-      nextItems.push({ ...item, evidence: nextEvidence });
-    }
-    return soapChanged ? { ...section, items: nextItems } : section;
-  };
-
-  const nextSections = {
-    S: pruneSection(state.soap.sections.S),
-    O: pruneSection(state.soap.sections.O),
-    A: pruneSection(state.soap.sections.A),
-    P: pruneSection(state.soap.sections.P),
-  };
-
   return {
     ...state,
-    segments: nextSegments,
-    soap: soapChanged
-      ? {
-          ...state.soap,
-          sections: nextSections,
-        }
-      : state.soap,
+    segments: upsertSegment(state.segments, payload.segment, false),
+    soap: payload.soap.revision >= state.soap.revision ? payload.soap : state.soap,
+    soapStatus:
+      payload.soap.revision >= state.soap.revision
+        ? (payload.soapStatus ?? state.soapStatus)
+        : state.soapStatus,
+    hasUnappliedTranscript:
+      payload.soap.revision >= state.soap.revision
+        ? (payload.hasUnappliedTranscript ?? state.hasUnappliedTranscript)
+        : state.hasUnappliedTranscript,
+    changedItemIds:
+      payload.soap.revision >= state.soap.revision
+        ? (payload.changedItemIds ?? [])
+        : state.changedItemIds,
   };
 }
 

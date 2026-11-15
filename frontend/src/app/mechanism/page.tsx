@@ -1,8 +1,7 @@
 import * as stylex from "@stylexjs/stylex";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Badge } from "@/shared/ui/badge/Badge";
-import { Card } from "@/shared/ui/card/Card";
+import { Badge, Card } from "@/shared/ui";
 import { mechanismStyles as s } from "./mechanism.styles";
 
 export const metadata: Metadata = {
@@ -31,7 +30,7 @@ const PIPELINE_STAGES = [
     tag: "CPU Speaker ID",
     title: "CAM++ 話者照合と重複・交代境界整理",
     description:
-      "45秒PCM履歴から CPU（sherpa-onnx）で声紋抽出し、薬剤師声紋・患者一時重心で照合。話者交代分割・回り込み重複統合・保守的「話者不明」判定を行います。",
+      "45秒PCM履歴から CPU（sherpa-onnx）で声紋抽出し、薬剤師声紋・患者一時重心で照合。話者交代分割・回り込み重複統合・不確かな発話の患者フォールバックを行います。",
   },
   {
     step: "4",
@@ -65,13 +64,13 @@ const CORE_LOGICS = [
   {
     badge: "話者照合 · 境界/重複制御",
     tone: "success" as const,
-    title: "保守的な話者不明維持・短発話蓄積・words[] 分割と 2ch 重複統合",
+    title: "患者フォールバック・短発話蓄積・words[] 分割と 2ch 重複統合",
     summary:
       "左右マイクへの声の回り込みや 1ch での複数人混在に対し、無理にマイク番号へ当てはめず複数シグナルで精度と整合性を両立しています。",
     points: [
-      "ConversationSpeakerTracker は 45.0s の BackendAudioPcmRingBuffer から該当区間 PCM を切り出し、薬剤師閾値（高 0.50 / 低 0.35）・患者閾値（0.35）・マージン 0.08・優位比 1.8 で判定。短い/曖昧発話は「話者不明（unknown）」のまま保持します。",
+      "ConversationSpeakerTracker は 45.0s の BackendAudioPcmRingBuffer から該当区間 PCM を切り出し、薬剤師閾値（高 0.50 / 低 0.35）・患者閾値（0.35）・マージン 0.08・優位比 1.8 で判定。短い/曖昧な発話は患者に寄せて表示・SOAP処理します。",
       "0.6s 未満の短い不明発話は同一チャンネル 350ms 以内の連続発話（_pending_short_segments / 最大4件）を連結再照合して後から確定。1発話内の連続発話は Deepgram words[] を句読点または 0.35s 無音で分割（build_word_clause_candidates）して話者交代を切り分けます。",
-      "両マイクに同一話者が載った場合は到着順を問わず類似度・IoU・RMS優位で一方を除去（_suppress_incoming_crosstalk / removed）、別話者の同時発話はそのまま保持します。UI からの手動変更（UpdateSegmentSpeaker）は自動再照合より優先保護されます。",
+      "両マイクに同一話者が載った場合は到着順を問わず類似度・IoU・RMS優位で重複側をシステムが削除（_suppress_incoming_crosstalk / removed）、別話者の同時発話はそのまま保持します。UI からの手動変更（UpdateSegmentSpeaker）は自動再照合より優先保護されます。",
     ],
   },
   {
@@ -79,7 +78,7 @@ const CORE_LOGICS = [
     tone: "neutral" as const,
     title: "左右レベル表示・回り込み抑止と STT 非依存 AudioActivityGate",
     summary:
-      "画面は左に患者、右に薬剤師（話者不明は分離バッジ）を配置。音量ゲートを Deepgram から分離し、将来の STT 差し替えにも対応できる構造です。",
+      "画面は左に患者、右に薬剤師（不確かな発話も患者側）を配置。音量ゲートを Deepgram から分離し、将来の STT 差し替えにも対応できる構造です。",
     points: [
       "ブラウザ側 detectSpeakingChannels はノイズ下限 0.025・優位比 1.25 で隣マイクへの回り込みを抑止してリアルタイム発話インジケーターを表示します。",
       "バックエンドの AudioActivityGate は RMS 閾値 0.008・プリロール 300ms・ハングオーバー 600ms で無音をスキップし、無音区間は KeepAlive（4.0s）で WebSocket 接続を維持します。",
@@ -93,7 +92,7 @@ const CORE_LOGICS = [
     summary:
       "確定発話のたびに LLM を呼ぶとコスト増と競合更新が起きるため、Deepgram 受信とは別の非同期ワーカーが一定間隔でまとめて抽出を行います。",
     points: [
-      "デバウンス 500ms、最大待機・最短実行間隔 12.0s（設定変更可）で複数発話を 1 回の extract_spoa に集約。",
+      "デバウンス 500ms、最大待機・最短実行間隔 12.0s（設定変更可）で複数発話を 1 回の extract_soap に集約。",
       "「はい」「ありがとうございます」など挨拶・相槌だけのバッチは is_ignorable_utterance_text で LLM 呼び出しを丸ごとスキップ。",
       "Gemini（既定 gemini-3.5-flash-lite）は思考量を最小化（Gemini 3 系は thinking_level='minimal'、2.5 系は thinking_budget=0）し高速・低コスト化。",
     ],
@@ -106,8 +105,8 @@ const CORE_LOGICS = [
       "LLM 出力はそのまま画面へ流さず SoapStateManager が引用・話者権限を検証。後から話者が確定・修正された際も根拠不整合を残しません。",
     points: [
       "S（主観的情報）と P（計画）は会話全体を各 1 項目へ逐次統合。すべての引用（quote）が確定発話の最新版本文に一致するか検証し、不一致バッチは全体拒否します。",
-      "S は患者発話根拠、P・A は薬剤師発話根拠が必須。「話者不明」発話はロールが確定するまで S/P 抽出・根拠紐付けの対象外として誤混入を防ぎます。",
-      "短発話の後追い確定、2ch 重複削除、UI 手動訂正でセグメントの話者や有効性が変わると reconcile_transcript_segments が走り、不整合項目の撤回（retracted_item_ids）や再評価キュー入れを自動実行します。",
+      "S は患者発話根拠、P・会話由来 A は薬剤師発話根拠が必須。不確かな発話は患者として S/O 抽出の対象になり、P・会話由来 A の根拠には使いません。誤った話者は文字起こし中に手動訂正できます。",
+      "短発話の後追い確定・UI 手動話者訂正では reconcile_transcript_segments が根拠を再整合します。発話の無効化・再有効化や自動重複削除では既存 SOAP を撤回し、有効な発話全体から再生成します。",
     ],
   },
   {
@@ -117,7 +116,7 @@ const CORE_LOGICS = [
     summary:
       "薬歴の A（Assessment）は単なる評価ではなく「SO の情報から判断してなぜ P を実施したか」という臨床判断であり、会話中にそのまま発話されないことが一般的です。",
     points: [
-      "会話中の extract_spoa は明示的に言語化された場合を除き推測 A を作らず、API コストと根拠の薄い推測を抑制。",
+      "会話中の extract_soap は明示的に言語化された場合を除き推測 A を作らず、API コストと根拠の薄い推測を抑制。",
       "文字起こし停止時（15.0s 予算内）に最終発話を同期後、s_items・o_items・plan_items を渡して finalize_a_from_p を実行。",
       "会話由来 A（origin='conversation'）は保護し、推測 A（origin='plan_inference'）には「要確認」を付与。再開後に P が変われば未反映フラグで通知します。",
     ],
@@ -127,7 +126,7 @@ const CORE_LOGICS = [
 const SOAP_ROLES = [
   {
     code: "S 主観的情報",
-    source: "入力元: 患者（確定ロール必須 / 不明は除外）",
+    source: "入力元: 患者（不確かな発話の患者フォールバックを含む）",
     behavior:
       "患者の主訴・症状・生活背景・相談事項を 1 項目へ逐次統合。話者が後から患者と確定・訂正された発話も再評価対象へ自動合流します。",
   },
@@ -135,7 +134,7 @@ const SOAP_ROLES = [
     code: "O 客観的情報",
     source: "入力元: 双方の発言（事実）",
     behavior:
-      "処方日数や検査値・体温などの事実を抽出。患者発言は reported、薬剤師確認は confirmed として扱い、重複削除時は根拠も整理されます。",
+      "処方日数や検査値・体温などの事実を抽出。患者発言は reported、薬剤師確認は confirmed として扱い、重複無効化時は根拠も整理されます。",
   },
   {
     code: "A アセスメント",
@@ -145,7 +144,7 @@ const SOAP_ROLES = [
   },
   {
     code: "P 計画",
-    source: "入力元: 薬剤師（確定ロール必須 / 不明は除外）",
+    source: "入力元: 薬剤師（患者フォールバックの発話は除外）",
     behavior:
       "服薬指導・注意点・受診勧奨を 1 項目へ統合更新し、話者訂正や撤回発言があれば計画本文および依存項目の整合性を再評価します。",
   },
@@ -194,7 +193,7 @@ const SPEC_ROWS = [
     layer: "状態検証・再評価",
     component: "SoapStateManager (reconcile_transcript_segments)",
     params: "引用部分文字列一致・segment_revision 一致・役割制約・retracted_item_ids 通知",
-    role: "根拠と権限の原子的適用に加え、話者訂正・重複削除時の SOAP 撤回/再評価を実行",
+    role: "根拠と権限の原子的適用に加え、話者訂正・重複無効化時の SOAP 撤回/再評価を実行",
   },
   {
     layer: "A 最終生成",

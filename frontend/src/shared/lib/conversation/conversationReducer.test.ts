@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyConversationSegmentDeleted,
+  applyConversationSegmentEnabled,
   applyConversationWsEvent,
   createInitialConversationState,
   parseConversationWsEvent,
@@ -259,7 +259,7 @@ describe("conversationReducer", () => {
     expect(text).toContain("P (計画)\n（未抽出）");
   });
 
-  it("applyConversationSegmentDeleted が削除セグメントと依存SOAP根拠を整合する", () => {
+  it("applyConversationSegmentEnabled が削除セグメントと依存SOAP根拠を整合する", () => {
     const initial = {
       ...createInitialConversationState("conv-1"),
       segments: [
@@ -328,8 +328,17 @@ describe("conversationReducer", () => {
       },
     };
 
-    const next = applyConversationSegmentDeleted(initial, { streamId: "s1", segmentId: "seg-2" });
-    expect(next.segments.map((s) => s.segment_id)).toEqual(["seg-1"]);
+    const next = applyConversationSegmentEnabled(initial, {
+      conversationId: "conv-1",
+      segment: { ...initial.segments[1], disabled: true, segment_revision: 2 },
+      soap: {
+        ...initial.soap,
+        revision: 2,
+        sections: { ...initial.soap.sections, S: { revision: 2, items: [] } },
+      },
+    });
+    expect(next.segments.map((s) => s.segment_id)).toEqual(["seg-1", "seg-2"]);
+    expect(next.segments[1].disabled).toBe(true);
     expect(next.soap.sections.S.items).toEqual([]);
   });
 });

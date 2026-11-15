@@ -62,7 +62,8 @@ test("すべてのストーリーを描画でき、StyleXのスタイルが適�
       await page.goto(`/iframe.html?id=${encodeURIComponent(story.id)}&viewMode=story`);
       const root = page.locator("#storybook-root");
       await expect(root).toBeVisible();
-      await expect(root).not.toBeEmpty();
+      // アイコンのみのストーリーもあるため、文字列ではなく描画要素を確認する。
+      await expect(root.locator(":scope > *").first()).toBeVisible();
       await expect(root.locator(":scope > *").first()).toHaveAttribute("class", /\S+/);
       await expect(page.locator("body")).not.toContainText("Unexpected 'stylex.");
       expect(errors).toEqual([]);

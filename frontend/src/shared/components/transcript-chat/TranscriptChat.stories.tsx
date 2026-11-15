@@ -10,7 +10,6 @@ import {
 const SPEAKER_OPTIONS: readonly TranscriptSpeakerOption[] = [
   { value: "pharmacist", label: "薬剤師" },
   { value: "patient", label: "患者" },
-  { value: "unknown", label: "話者不明" },
 ];
 
 const SPEAKER_LABELS: Record<TranscriptSpeakerRole, string> = {
@@ -85,7 +84,8 @@ const meta = {
     scrollToBottomLabel: "↓ 新しい発話",
     speakerOptions: SPEAKER_OPTIONS,
     getSpeakerSelectLabel: ({ timeLabel }) => `${timeLabel} の話者を変更`,
-    getDeleteSegmentLabel: ({ timeLabel, text }) => `${timeLabel} の発話「${text}」を削除`,
+    getSegmentToggleLabel: ({ timeLabel, text, disabled }) =>
+      `${timeLabel} の発話「${text}」を${disabled ? "有効に戻す" : "無効化"}`,
     segments: INITIAL_SEGMENTS,
   },
 } satisfies Meta<typeof TranscriptChat>;
@@ -119,8 +119,8 @@ export const WithSpeakerSelector: Story = {
         segmentId: "seg-u1",
         channelIndex: 1,
         align: "left",
-        speakerRole: "unknown",
-        roleName: "話者不明",
+        speakerRole: "patient",
+        roleName: "患者",
         timeLabel: "00:11.8",
         text: "飲み合わせも気になっています。",
         status: "final",
@@ -148,9 +148,13 @@ export const WithSpeakerSelector: Story = {
             ),
           );
         }}
-        onDeleteSegment={(streamId, segmentId) => {
+        onSetSegmentEnabled={(streamId, segmentId, enabled) => {
           setSegments((prev) =>
-            prev.filter((seg) => !(seg.streamId === streamId && seg.segmentId === segmentId)),
+            prev.map((seg) =>
+              seg.streamId === streamId && seg.segmentId === segmentId
+                ? { ...seg, disabled: !enabled }
+                : seg,
+            ),
           );
         }}
       />
@@ -158,7 +162,7 @@ export const WithSpeakerSelector: Story = {
   },
 };
 
-export const UnknownSpeakerAndRefined: Story = {
+export const PatientFallbackAndRefined: Story = {
   args: {
     countLabel: "3 発話",
     segments: [
@@ -168,8 +172,8 @@ export const UnknownSpeakerAndRefined: Story = {
         segmentId: "seg-unknown",
         channelIndex: 1,
         align: "left",
-        speakerRole: "unknown",
-        roleName: "話者不明",
+        speakerRole: "patient",
+        roleName: "患者",
         timeLabel: "00:04.0",
         text: "はい。",
         status: "final",
@@ -190,5 +194,12 @@ export const Empty: Story = {
 export const HighlightedEvidence: Story = {
   args: {
     highlightedSegmentKey: "stream-1:seg-2",
+  },
+};
+
+export const DisabledEvidence: Story = {
+  args: {
+    segments: INITIAL_SEGMENTS.map((segment, index) => ({ ...segment, disabled: index === 1 })),
+    onSetSegmentEnabled: () => {},
   },
 };

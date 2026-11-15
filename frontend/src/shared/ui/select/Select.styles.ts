@@ -105,6 +105,10 @@ export const selectStyles = stylex.create({
     maxWidth: "min(24rem, calc(100vw - 2rem))",
     maxHeight: "18rem",
     overflowY: "auto",
+    scrollbarGutter: "stable",
+    scrollbarWidth: "thin",
+    scrollbarColor: "var(--scrollbar-thumb) var(--scrollbar-track)",
+    overscrollBehavior: "contain",
     padding: "0.375rem",
     borderRadius: tokens.cornerMedium,
     backgroundColor: tokens.surfaceContainerHigh,
@@ -141,7 +145,8 @@ export const selectStyles = stylex.create({
     transitionTimingFunction: tokens.motionEasing,
   },
   itemHighlighted: {
-    backgroundColor: tokens.surfaceContainerHighest,
+    backgroundImage: tokens.stateHover,
+    boxShadow: `inset 0 0 0 2px ${tokens.primary}`,
   },
   itemSelected: {
     backgroundColor: tokens.secondaryContainer,
@@ -150,6 +155,9 @@ export const selectStyles = stylex.create({
   },
   itemDisabled: {
     color: tokens.disabledContent,
+    backgroundColor: "transparent",
+    backgroundImage: "none",
+    boxShadow: "none",
     cursor: "not-allowed",
   },
   indicator: {

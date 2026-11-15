@@ -11,6 +11,7 @@ export interface TranscriptSegment {
   startSec: number;
   endSec: number;
   confidence: number;
+  disabled?: boolean;
 }
 
 export interface TranscriptFeedState {
@@ -153,16 +154,15 @@ export function applyDeepgramTranscriptEvent(
 /**
  * 1マイク表示などで重複・不要な確定発話をローカル配列から削除する。
  */
-export function removeTranscriptSegment(
+export function setTranscriptSegmentEnabled(
   state: TranscriptFeedState,
   segmentId: string,
+  enabled: boolean,
 ): TranscriptFeedState {
-  const nextSegments = state.segments.filter((segment) => segment.id !== segmentId);
-  if (nextSegments.length === state.segments.length) {
-    return state;
-  }
   return {
     ...state,
-    segments: nextSegments,
+    segments: state.segments.map((segment) =>
+      segment.id === segmentId ? { ...segment, disabled: !enabled } : segment,
+    ),
   };
 }

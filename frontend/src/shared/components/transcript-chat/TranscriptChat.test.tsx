@@ -49,6 +49,25 @@ const SAMPLE_SEGMENTS = [
 ];
 
 describe("TranscriptChat", () => {
+  it("無効な原文は取り消し線で残し、有効化操作で同じIDを返す", async () => {
+    const onSetSegmentEnabled = vi.fn();
+    render(
+      <TranscriptChat
+        title="会話"
+        emptyMessage="空"
+        scrollToBottomLabel="末尾"
+        segments={[{ ...SAMPLE_SEGMENTS[0], disabled: true }]}
+        getSegmentToggleLabel={({ disabled }) => (disabled ? "有効に戻す" : "無効化")}
+        onSetSegmentEnabled={onSetSegmentEnabled}
+      />,
+    );
+    const text = screen.getByText(SAMPLE_SEGMENTS[0].text);
+    expect(text.parentElement).toHaveAttribute("data-disabled", "true");
+    expect(text.tagName).toBe("S");
+    await userEvent.click(screen.getByRole("button", { name: "有効に戻す" }));
+    expect(onSetSegmentEnabled).toHaveBeenCalledWith("s1", "seg-1", true);
+    expect(text).toBeInTheDocument();
+  });
   const getAnimations = Element.prototype.getAnimations;
   beforeAll(() => {
     Element.prototype.getAnimations = () => [];
@@ -173,7 +192,7 @@ describe("TranscriptChat", () => {
 
   it("削除ボタン押下で対象セグメントのみ削除ハンドラを呼び、interim には表示しない", async () => {
     const user = userEvent.setup();
-    const onDeleteSegment = vi.fn();
+    const onSetSegmentEnabled = vi.fn();
     render(
       <TranscriptChat
         title="文字起こし"
@@ -193,8 +212,8 @@ describe("TranscriptChat", () => {
         ]}
         emptyMessage="空"
         scrollToBottomLabel="↓ 新しい発話"
-        getDeleteSegmentLabel={({ timeLabel, text }) => `${timeLabel} の発話「${text}」を削除`}
-        onDeleteSegment={onDeleteSegment}
+        getSegmentToggleLabel={({ timeLabel, text }) => `${timeLabel} の発話「${text}」を削除`}
+        onSetSegmentEnabled={onSetSegmentEnabled}
       />,
     );
 
@@ -206,7 +225,29 @@ describe("TranscriptChat", () => {
       name: "00:06.8 の発話「熱は37.8℃です。」を削除",
     });
     await user.click(deleteButton);
-    expect(onDeleteSegment).toHaveBeenCalledTimes(1);
-    expect(onDeleteSegment).toHaveBeenCalledWith("s1", "seg-3");
+    expect(onSetSegmentEnabled).toHaveBeenCalledTimes(1);
+    expect(onSetSegmentEnabled).toHaveBeenCalledWith("s1", "seg-3", false);
+  });
+
+  it("発話があるときのみスクロール領域をキーボードフォーカス可能にする", () => {
+    const { rerender } = render(
+      <TranscriptChat
+        title="文字起こし"
+        segments={[]}
+        emptyMessage="まだ発話はありません"
+        scrollToBottomLabel="↓ 新しい発話"
+      />,
+    );
+    expect(screen.getByTestId("transcript-chat-scroller")).not.toHaveAttribute("tabindex");
+
+    rerender(
+      <TranscriptChat
+        title="文字起こし"
+        segments={SAMPLE_SEGMENTS}
+        emptyMessage="まだ発話はありません"
+        scrollToBottomLabel="↓ 新しい発話"
+      />,
+    );
+    expect(screen.getByTestId("transcript-chat-scroller")).toHaveAttribute("tabindex", "0");
   });
 });

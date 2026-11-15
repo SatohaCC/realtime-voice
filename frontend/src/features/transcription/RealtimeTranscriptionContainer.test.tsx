@@ -213,7 +213,7 @@ describe("RealtimeTranscriptionContainer", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("2マイク時に薬剤師声紋バーと unknown 発話の「話者不明」ラベルを表示する", () => {
+  it("2マイク時も声紋登録バーを表示せず、不明な発話は患者に寄せる", () => {
     mocks.hookState.mode = "dual";
     const conv = createInitialConversationState("conv-unknown");
     mocks.hookState.conversation = {
@@ -238,8 +238,11 @@ describe("RealtimeTranscriptionContainer", () => {
 
     render(<RealtimeTranscriptionContainer />);
 
-    expect(screen.getByRole("region", { name: "薬剤師声紋（端末ローカル）" })).toBeInTheDocument();
-    expect(screen.getByText("話者不明")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "薬剤師声紋（端末ローカル）" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("話者不明")).not.toBeInTheDocument();
+    expect(screen.getAllByText("患者").length).toBeGreaterThan(0);
     expect(screen.getByText("お待たせしました。")).toBeInTheDocument();
   });
 });

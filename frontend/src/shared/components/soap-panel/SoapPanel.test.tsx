@@ -62,6 +62,7 @@ describe("SoapPanel", () => {
     expect(screen.getByRole("heading", { name: "P 計画" })).toBeInTheDocument();
     expect(screen.getAllByText("まだありません")).toHaveLength(2);
     expect(screen.queryByText(/異常なし|特記なし/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("soap-panel-scroller")).toHaveAttribute("tabindex", "0");
   });
 
   it("単一根拠と複数根拠の一覧から発話ジャンプ通知を発火する", () => {

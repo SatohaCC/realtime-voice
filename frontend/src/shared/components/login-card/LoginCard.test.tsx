@@ -6,7 +6,6 @@ import { LoginCard } from "./LoginCard";
 describe("LoginCard", () => {
   const providers = [
     { id: "google", label: "Google でログイン", pendingLabel: "Google へ移動中..." },
-    { id: "discord", label: "Discord でログイン", pendingLabel: "Discord へ移動中..." },
   ];
 
   it("プロバイダ選択と処理中状態・エラー再試行を描画する", async () => {
@@ -32,14 +31,13 @@ describe("LoginCard", () => {
         title="ログイン"
         description="アカウントを選択してください。"
         providers={providers}
-        pendingProviderId="discord"
+        pendingProviderId="google"
         onSelectProvider={onSelectProvider}
         onRetry={onRetry}
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Discord へ移動中..." })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Google でログイン" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Google へ移動中..." })).toBeDisabled();
 
     rerender(
       <LoginCard

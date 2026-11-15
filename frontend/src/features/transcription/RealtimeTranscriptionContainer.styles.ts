@@ -64,8 +64,8 @@ export const realtimeTranscriptionContainerStyles = stylex.create({
     },
     gap: "1rem",
     height: {
-      default: "clamp(32rem, calc(100dvh - 15.5rem), 68rem)",
-      [NARROW_BP]: "clamp(26rem, calc(100dvh - 17rem), 46rem)",
+      default: "clamp(34rem, calc(100dvh - 14.5rem), 72rem)",
+      [NARROW_BP]: "auto",
     },
     minWidth: 0,
     minHeight: 0,
@@ -73,7 +73,10 @@ export const realtimeTranscriptionContainerStyles = stylex.create({
   paneColumn: {
     minWidth: 0,
     minHeight: 0,
-    height: "100%",
+    height: {
+      default: "100%",
+      [NARROW_BP]: "auto",
+    },
     display: "flex",
     flexDirection: "column",
   },

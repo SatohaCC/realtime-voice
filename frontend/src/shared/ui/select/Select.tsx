@@ -67,8 +67,8 @@ export function Select({
             stylex.props(
               s.trigger,
               size === "sm" && s.triggerSm,
-              isDisabled && s.triggerDisabled,
               triggerStyle,
+              isDisabled && s.triggerDisabled,
             ).className
           }
         >
@@ -102,8 +102,8 @@ export function Select({
               className={({ selected, highlighted, disabled: itemDisabled }) =>
                 stylex.props(
                   s.item,
-                  highlighted && s.itemHighlighted,
                   selected && s.itemSelected,
+                  highlighted && s.itemHighlighted,
                   itemDisabled && s.itemDisabled,
                 ).className
               }

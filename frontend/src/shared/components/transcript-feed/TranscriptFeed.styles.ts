@@ -47,7 +47,16 @@ export const transcriptFeedStyles = stylex.create({
     gap: "0.75rem",
     maxHeight: "24rem",
     overflowY: "auto",
+    scrollbarGutter: "stable",
+    scrollbarWidth: "auto",
+    scrollbarColor: "var(--scrollbar-thumb) var(--scrollbar-track)",
+    overscrollBehavior: "contain",
     paddingRight: "0.25rem",
+    outline: {
+      default: "none",
+      ":focus-visible": `3px solid ${tokens.primary}`,
+    },
+    outlineOffset: "-3px",
   },
   item: {
     display: "flex",
