@@ -14,6 +14,7 @@ export interface AudioCaptureFrame {
 
 export interface DualMicCaptureOptions {
   signal?: AbortSignal;
+  autoGainControl?: boolean;
   mic1DeviceId: string;
   mic2DeviceId?: string;
   onAudioFrame: (frame: AudioCaptureFrame) => void;
@@ -96,6 +97,7 @@ export async function createDualMicCapture({
   onAudioFrame,
   onError,
   signal,
+  autoGainControl,
 }: DualMicCaptureOptions): Promise<DualMicCaptureSession> {
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
     throw new Error("このブラウザはマイク入力（getUserMedia）に対応していません。");
@@ -109,7 +111,7 @@ export async function createDualMicCapture({
     echoCancellation: true,
     noiseSuppression: true,
     // 2マイクでは回り込んだ遠い声を自動増幅せず、マイク間の音量差を保つ
-    autoGainControl: !useDual,
+    autoGainControl: autoGainControl ?? !useDual,
   });
 
   const streams: MediaStream[] = [];

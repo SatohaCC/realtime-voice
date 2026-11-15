@@ -1,6 +1,17 @@
 import { parseConversationWsEvent } from "../conversation/conversationReducer";
 import type { ConversationWsEvent } from "../conversation/types";
 
+export interface DeepgramSpeakerProfilePayload {
+  modelId: string;
+  embedding: readonly number[];
+}
+
+export interface SpeakerProfileAckInfo {
+  accepted: boolean;
+  modelId: string;
+  reason?: string | null;
+}
+
 export interface DeepgramStreamOptions {
   accessToken: string;
   channels: 1 | 2;
@@ -12,8 +23,10 @@ export interface DeepgramStreamOptions {
   stopTimeoutMs?: number;
   enableSoap?: boolean;
   conversationId?: string;
+  speakerProfile?: DeepgramSpeakerProfilePayload | null;
   signal?: AbortSignal;
   onAuthOk?: (info: { expiresAt: number; sessionExpiresAt: number }) => void;
+  onSpeakerProfileAck?: (ack: SpeakerProfileAckInfo) => void;
   onTranscript?: (event: DeepgramTranscriptEvent) => void;
   onConversationEvent?: (event: ConversationWsEvent) => void;
   onError?: (error: Error) => void;
@@ -32,6 +45,12 @@ export interface DeepgramTranscriptEvent {
 
 export interface DeepgramStreamSession {
   sendAudio: (pcm16: ArrayBuffer) => void;
+  updateSegmentSpeaker: (
+    streamId: string,
+    segmentId: string,
+    speakerRole: "pharmacist" | "patient" | "unknown",
+  ) => void;
+  setSegmentEnabled: (streamId: string, segmentId: string, enabled: boolean) => void;
   close: () => Promise<void>;
 }
 
@@ -161,6 +180,31 @@ export function parseDeepgramErrorMessage(rawData: string): string | null {
 }
 
 /**
+ * Backend から届いた SpeakerProfileAck イベントを解析する。
+ */
+export function parseSpeakerProfileAck(rawData: string): SpeakerProfileAckInfo | null {
+  let parsed: { type?: unknown; accepted?: unknown; model_id?: unknown; reason?: unknown };
+  try {
+    parsed = JSON.parse(rawData) as {
+      type?: unknown;
+      accepted?: unknown;
+      model_id?: unknown;
+      reason?: unknown;
+    };
+  } catch {
+    return null;
+  }
+  if (parsed.type !== "SpeakerProfileAck" || typeof parsed.accepted !== "boolean") {
+    return null;
+  }
+  return {
+    accepted: parsed.accepted,
+    modelId: typeof parsed.model_id === "string" ? parsed.model_id : "",
+    reason: typeof parsed.reason === "string" ? parsed.reason : null,
+  };
+}
+
+/**
  * Deepgram WebSocket から受信した JSON メッセージを解析する。
  */
 export function parseDeepgramMessage(rawData: string): DeepgramTranscriptEvent | null {
@@ -211,7 +255,9 @@ export function createDeepgramStreamSession({
   stopTimeoutMs,
   enableSoap = false,
   conversationId,
+  speakerProfile,
   onAuthOk,
+  onSpeakerProfileAck,
   onTranscript,
   onConversationEvent,
   onError,
@@ -286,6 +332,28 @@ export function createDeepgramStreamSession({
         if (!settled || closing || socket.readyState !== WebSocket.OPEN) return;
         socket.send(pcm16);
       },
+      updateSegmentSpeaker: (streamId, segmentId, speakerRole) => {
+        if (!settled || closing || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(
+          JSON.stringify({
+            type: "UpdateSegmentSpeaker",
+            stream_id: streamId,
+            segment_id: segmentId,
+            speaker_role: speakerRole,
+          }),
+        );
+      },
+      setSegmentEnabled: (streamId, segmentId, enabled) => {
+        if (!settled || closing || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(
+          JSON.stringify({
+            type: "SetSegmentEnabled",
+            enabled,
+            stream_id: streamId,
+            segment_id: segmentId,
+          }),
+        );
+      },
       close: () => {
         if (closing || closed) return closePromise;
         closing = true;
@@ -316,6 +384,15 @@ export function createDeepgramStreamSession({
         if (authOk) {
           settled = true;
           clearTimeout(connectTimer);
+          if (speakerProfile && socket.readyState === WebSocket.OPEN) {
+            socket.send(
+              JSON.stringify({
+                type: "SpeakerProfile",
+                model_id: speakerProfile.modelId,
+                embedding: speakerProfile.embedding,
+              }),
+            );
+          }
           keepAliveTimer = setInterval(() => {
             if (!closing && socket.readyState === WebSocket.OPEN)
               socket.send(JSON.stringify({ type: "KeepAlive" }));
@@ -332,6 +409,12 @@ export function createDeepgramStreamSession({
           reject(new Error(errorMessage));
           forceClose();
         }
+        return;
+      }
+
+      const profileAck = parseSpeakerProfileAck(event.data);
+      if (profileAck) {
+        onSpeakerProfileAck?.(profileAck);
         return;
       }
 

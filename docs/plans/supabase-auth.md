@@ -7,7 +7,7 @@
 
 - トップページは公開を維持する。
 - 文字起こしを `/transcription` に移し、このページと文字起こしAPIを認証必須にする。
-- OAuthプロバイダはGoogleとDiscord。
+- OAuthプロバイダはGoogleのみ。
 - Next.js 16、FastAPI、StyleX、既存の医療向けM3テーマを維持する。
 - 収音キャンセル、末尾PCMのflush、最終結果の待機、発話区間の音量履歴、再接続時のセグメント分離を維持する。
 - この計画には実装・コミット・プッシュ・デプロイ・外部サービスの設定変更を含めない。
@@ -18,7 +18,7 @@
 |---|---|---|
 | `/` | 公開 | 紹介、接続状態、配色。文字起こしは別ページへのリンクにする |
 | `/transcription` | ログイン必須 | 既存の収音・文字起こし画面。Server Componentでも認証を確認する |
-| `/login` | 公開 | Google / Discordでログイン。認証済みなら安全な戻り先へ移動 |
+| `/login` | 公開 | Googleでログイン。認証済みなら安全な戻り先へ移動 |
 | `/auth/callback` | 公開 | OAuthのcodeをCookieセッションへ交換 |
 | `/auth/logout` | POST | ログアウト。Originを検査し、GETでは実行しない |
 | `/api/health` | 公開 | 監視用のヘルスチェック |
@@ -29,7 +29,7 @@
 ## Phase 0: 外部設定と接続条件の準備
 
 1. Supabaseプロジェクトと現在の署名方式を確認する。JWKSによる検証の前提をES256 / RS256の非対称鍵に固定し、HS256を無言で許可しない。
-2. Google / Discordを有効化し、各プロバイダのコールバックにはSupabaseの `/auth/v1/callback` を登録する。
+2. Googleを有効化し、プロバイダのコールバックにはSupabaseの `/auth/v1/callback` を登録する。
 3. SupabaseのRedirect URLsにはローカル・本番・運用するPreviewの `/auth/callback` を登録する。Previewを許可する範囲はチームの管理対象に限定する。
 4. `.env.example` とREADMEに以下を記載する。実値や秘密情報はコミットしない。
    - Frontend: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
@@ -99,9 +99,9 @@
 7. ヘッダーにログイン状態とログイン／ログアウト操作を接続する。共有の表示部品はPropsで表示と操作を受け取り、SupabaseやNext.jsへ依存させない。
 8. `useRealtimeTranscription` に認証状態・トークン取得・ログアウト時の停止を接続する。Supabaseをfeaturesから直接importしない。
 
-ログイン画面は既存のM3トークンとStyleXを使う。Google / Discordのボタン、処理中、失敗、再試行を用意する。表示部品はStorybookで確認し、アプリ内に部品ギャラリーは追加しない。
+ログイン画面のカードは既存のM3トークンとStyleXを使う。Googleログインボタンは[Google公式ブランド規定](https://developers.google.com/identity/branding-guidelines)のLightテーマ・公式カラーGロゴ・Google Sansで表示し、ブランド色は製品テーマから独立させる。処理中、失敗、再試行を用意する。表示部品はStorybookで確認し、アプリ内に部品ギャラリーは追加しない。
 
-受入条件: `/`は未ログインで閲覧できる。`/transcription`は直接アクセスでも保護され、Google / Discordどちらでもログイン後に同ページへ戻る。ブラウザへDeepgramキーやSupabaseの管理用キーを渡さない。
+受入条件: `/`は未ログインで閲覧できる。`/transcription`は直接アクセスでも保護され、Googleでログイン後に同ページへ戻る。ブラウザへDeepgramキーやSupabaseの管理用キーを渡さない。
 
 ## Phase 4: テストと最終確認
 

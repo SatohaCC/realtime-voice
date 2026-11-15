@@ -3,6 +3,16 @@
 /* biome-ignore lint/suspicious/noUnknownAtRules: StyleX の CSS 注入ディレクティブ */
 @stylex;
 
+/* 公式配布のGoogle SansをGoogleの欧文ロゴ表記にだけ使用する。 */
+@font-face {
+  font-family: "Google Sign In";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/identity/google-sans-latin.woff2") format("woff2");
+  unicode-range: U+47, U+65, U+67, U+6C, U+6F;
+}
+
 @layer reset {
   *,
   *::before,
@@ -14,18 +24,54 @@
 }
 :root {
   color-scheme: light dark;
+  --scrollbar-thumb: #6f7a75;
+  --scrollbar-track: #eff5f3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --scrollbar-thumb: #88948e;
+    --scrollbar-track: #191f1d;
+  }
+}
+@media (prefers-contrast: more) {
+  :root {
+    --scrollbar-thumb: #191f1d;
+    --scrollbar-track: #ffffff;
+  }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root {
+    --scrollbar-thumb: #ffffff;
+    --scrollbar-track: #0b100f;
+  }
 }
 body {
   font-family: system-ui, -apple-system, "Segoe UI", "Yu Gothic UI", "Hiragino Sans", sans-serif;
   line-height: 1.6;
 }
 html {
+  overflow-y: scroll;
   scroll-behavior: smooth;
   scroll-padding-top: 4.5rem;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: auto;
 }
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
+  }
+}
+@supports not (scrollbar-color: auto) {
+  *::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
   }
 }
 ::selection {

@@ -245,6 +245,42 @@ export function applyConversationWsEvent(
   }
 }
 
+/** サーバーが確認した有効性変更を、同じ会話の最新状態にだけ反映する。 */
+export function applyConversationSegmentEnabled(
+  state: ConversationWorkspaceState,
+  payload: {
+    conversationId: string;
+    segment: TranscriptSegment;
+    soap: SoapNote;
+    soapStatus?: SoapLifecycleStatus;
+    hasUnappliedTranscript?: boolean;
+    changedItemIds?: readonly string[];
+  },
+): ConversationWorkspaceState {
+  if (
+    payload.conversationId !== state.conversationId ||
+    payload.soap.conversation_id !== state.conversationId
+  )
+    return state;
+  return {
+    ...state,
+    segments: upsertSegment(state.segments, payload.segment, false),
+    soap: payload.soap.revision >= state.soap.revision ? payload.soap : state.soap,
+    soapStatus:
+      payload.soap.revision >= state.soap.revision
+        ? (payload.soapStatus ?? state.soapStatus)
+        : state.soapStatus,
+    hasUnappliedTranscript:
+      payload.soap.revision >= state.soap.revision
+        ? (payload.hasUnappliedTranscript ?? state.hasUnappliedTranscript)
+        : state.hasUnappliedTranscript,
+    changedItemIds:
+      payload.soap.revision >= state.soap.revision
+        ? (payload.changedItemIds ?? [])
+        : state.changedItemIds,
+  };
+}
+
 const KNOWN_EVENT_TYPES = new Set([
   "TranscriptUpdated",
   "SoapStatus",

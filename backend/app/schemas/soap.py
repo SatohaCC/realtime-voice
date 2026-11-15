@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SpeakerRole = Literal["pharmacist", "patient"]
+SpeakerRole = Literal["pharmacist", "patient", "unknown"]
 SoapSectionKey = Literal["S", "O", "A", "P"]
 SoapItemOrigin = Literal["conversation", "plan_inference"]
 SoapVerificationStatus = Literal["reported", "confirmed", "draft_inference"]
@@ -26,6 +26,7 @@ class TranscriptSegmentModel(BaseModel):
     end_sec: float = Field(ge=0.0)
     confidence: float = Field(ge=0.0, le=1.0)
     speech_final: bool = False
+    disabled: bool = False
 
 
 class SoapEvidenceModel(BaseModel):
@@ -113,7 +114,7 @@ class LlmPlanRef(BaseModel):
 
 
 class LlmSoapOperation(BaseModel):
-    """会話中の extract_spoa タスクが返す構造化操作候補。"""
+    """会話中の extract_soap タスクが返す構造化操作候補。"""
 
     action: Literal["add", "update", "retract"] = Field(
         description=(
@@ -153,8 +154,8 @@ class LlmSoapOperation(BaseModel):
     )
 
 
-class LlmExtractSpoaResult(BaseModel):
-    """会話中タスク extract_spoa の構造化出力契約。"""
+class LlmExtractSoapResult(BaseModel):
+    """会話中タスク extract_soap の構造化出力契約。"""
 
     operations: list[LlmSoapOperation] = Field(
         default_factory=list,

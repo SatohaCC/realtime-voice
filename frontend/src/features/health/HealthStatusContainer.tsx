@@ -1,6 +1,6 @@
 "use client";
 
-import { StatusCard } from "@/shared/components/status-card/StatusCard";
+import { StatusCard } from "@/shared/components";
 import { type HealthResponse, useHealthStatus } from "./useHealthStatus";
 
 function toBadge(data: HealthResponse | null, error: string | null, isLoading: boolean) {

@@ -22,6 +22,19 @@ type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {};
 
+export const Compact: Story = {
+  args: {
+    size: "sm",
+    hideLabel: true,
+    defaultValue: "pharmacist",
+    options: [
+      { value: "pharmacist", label: "薬剤師" },
+      { value: "patient", label: "患者" },
+      { value: "unknown", label: "話者不明" },
+    ],
+  },
+};
+
 export const Disabled: Story = {
   args: {
     disabled: true,

@@ -1,4 +1,4 @@
-export type SpeakerRole = "pharmacist" | "patient";
+export type SpeakerRole = "pharmacist" | "patient" | "unknown";
 export type SoapSectionKey = "S" | "O" | "A" | "P";
 export type SoapItemOrigin = "conversation" | "plan_inference";
 export type SoapVerificationStatus = "reported" | "confirmed" | "draft_inference";
@@ -19,6 +19,7 @@ export interface TranscriptSegment {
   end_sec: number;
   confidence: number;
   speech_final?: boolean;
+  disabled?: boolean;
 }
 
 export interface SoapEvidence {

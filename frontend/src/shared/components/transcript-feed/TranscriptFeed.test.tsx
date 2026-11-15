@@ -58,6 +58,7 @@ describe("TranscriptFeed", () => {
     expect(screen.getByText("こんにちは")).toBeInTheDocument();
     expect(screen.getByText("話者 B")).toBeInTheDocument();
     expect(screen.getByText("調子が悪いです")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "文字起こし結果" })).toHaveAttribute("tabindex", "0");
 
     await user.click(screen.getByRole("button", { name: "クリア" }));
     expect(onClear).toHaveBeenCalledTimes(1);

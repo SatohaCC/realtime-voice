@@ -1,11 +1,16 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { Badge, type BadgeProps } from "@/shared/ui/badge/Badge";
-import { Button } from "@/shared/ui/button/Button";
-import { Card } from "@/shared/ui/card/Card";
-import { SegmentedControl } from "@/shared/ui/segmented-control/SegmentedControl";
-import { Select } from "@/shared/ui/select/Select";
+import {
+  Badge,
+  type BadgeProps,
+  Banner,
+  Button,
+  Card,
+  Meter,
+  SegmentedControl,
+  Select,
+} from "@/shared/ui";
 import { dualMicPanelStyles } from "./DualMicPanel.styles";
 
 export interface AudioDeviceOption {
@@ -140,34 +145,22 @@ export function DualMicPanel({
                 }}
               />
 
-              <div {...stylex.props(dualMicPanelStyles.meterBlock)}>
-                <div {...stylex.props(dualMicPanelStyles.meterHeader)}>
-                  <span>{channel.levelLabel}</span>
-                  <span>{percent}%</span>
-                </div>
-                <meter
-                  min={0}
-                  max={100}
-                  low={15}
-                  high={80}
-                  optimum={45}
-                  value={percent}
-                  aria-label={`${channel.label} ${channel.levelLabel}`}
-                  {...stylex.props(
-                    dualMicPanelStyles.meter,
-                    channel.isSpeaking && dualMicPanelStyles.meterActive,
-                  )}
-                />
-              </div>
+              <Meter
+                label={channel.levelLabel}
+                aria-label={`${channel.label} ${channel.levelLabel}`}
+                value={percent}
+                showValue
+                tone={channel.isSpeaking ? "tertiary" : "primary"}
+              />
             </Card>
           );
         })}
       </div>
 
       {errorMessage ? (
-        <div role="alert" {...stylex.props(dualMicPanelStyles.errorBox)}>
+        <Banner tone="danger" role="alert">
           {errorMessage}
-        </div>
+        </Banner>
       ) : null}
 
       <div {...stylex.props(dualMicPanelStyles.controls)}>

@@ -4,40 +4,35 @@ import * as stylex from "@stylexjs/stylex";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Header, type HeaderNavItem } from "@/shared/components/header/Header";
+import { Header, type HeaderNavItem } from "@/shared/components";
 import { clearBrowserAuthSession, subscribeAuthState } from "@/shared/lib/supabase/client";
-import { Button } from "@/shared/ui/button/Button";
+import { Button } from "@/shared/ui";
 import { appHeaderStyles } from "./AppHeader.styles";
 
-export interface HeaderUserView {
-  userId: string;
-  email: string | null;
-}
-
 export interface AppHeaderProps {
-  /** サーバー側で取得した初期ログインユーザー情報 */
-  initialUser?: HeaderUserView | null;
+  /** サーバー側で判定した初期ログイン状態 */
+  initialAuthenticated?: boolean;
 }
 
 /**
  * アプリケーション共通のトップアプリバー。
  */
-export function AppHeader({ initialUser = null }: AppHeaderProps) {
+export function AppHeader({ initialAuthenticated = false }: AppHeaderProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const [currentUser, setCurrentUser] = useState<HeaderUserView | null>(initialUser);
+  const [isAuthenticated, setIsAuthenticated] = useState(initialAuthenticated);
 
   useEffect(() => {
-    setCurrentUser(initialUser);
-  }, [initialUser]);
+    setIsAuthenticated(initialAuthenticated);
+  }, [initialAuthenticated]);
 
   useEffect(() => {
     return subscribeAuthState({
       onUserChanged: (user) => {
-        setCurrentUser(user);
+        setIsAuthenticated(Boolean(user));
       },
       onSignedOut: () => {
-        setCurrentUser(null);
+        setIsAuthenticated(false);
       },
     });
   }, []);
@@ -46,25 +41,25 @@ export function AppHeader({ initialUser = null }: AppHeaderProps) {
     { href: "/", label: "ホーム", isCurrent: pathname === "/" },
     { href: "/transcription", label: "文字起こし", isCurrent: pathname === "/transcription" },
     { href: "/mechanism", label: "仕組み", isCurrent: pathname === "/mechanism" },
+    {
+      href: "/user",
+      label: "ユーザー",
+      isCurrent: pathname === "/user" || pathname.startsWith("/user/"),
+    },
   ];
 
-  const actions = currentUser ? (
-    <div {...stylex.props(appHeaderStyles.authActions)}>
-      {currentUser.email ? (
-        <span {...stylex.props(appHeaderStyles.userLabel)}>{currentUser.email}</span>
-      ) : null}
-      <form
-        action="/auth/logout"
-        method="post"
-        onSubmit={() => {
-          void clearBrowserAuthSession();
-        }}
-      >
-        <Button type="submit" variant="outlined" size="sm">
-          ログアウト
-        </Button>
-      </form>
-    </div>
+  const actions = isAuthenticated ? (
+    <form
+      action="/auth/logout"
+      method="post"
+      onSubmit={() => {
+        void clearBrowserAuthSession();
+      }}
+    >
+      <Button type="submit" variant="outlined" size="sm">
+        ログアウト
+      </Button>
+    </form>
   ) : (
     <Button variant="tonal" size="sm" onClick={() => router.push("/login")}>
       ログイン

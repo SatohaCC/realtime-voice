@@ -44,8 +44,8 @@ export const headerStyles = stylex.create({
       fontSize: "0.875rem",
       fontWeight: 600,
       textDecoration: "none",
-      outline: `3px solid ${tokens.onPrimary}`,
-      outlineOffset: "2px",
+      outline: `3px solid ${tokens.primary}`,
+      outlineOffset: "3px",
       boxShadow: tokens.shadow2,
     },
   },
@@ -183,8 +183,5 @@ export const headerStyles = stylex.create({
   },
   menuButton: {
     display: { default: "none", "@media (max-width: 839px)": "inline-flex" },
-    minWidth: "2.75rem",
-    minHeight: "2.75rem",
-    paddingInline: "0.625rem",
   },
 });

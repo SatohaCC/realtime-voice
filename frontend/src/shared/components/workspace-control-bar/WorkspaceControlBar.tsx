@@ -1,15 +1,17 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import type {
-  AudioDeviceOption,
-  MicChannelView,
-} from "@/shared/components/dual-mic-panel/DualMicPanel";
-import { Badge, type BadgeProps } from "@/shared/ui/badge/Badge";
-import { Button } from "@/shared/ui/button/Button";
-import { Card } from "@/shared/ui/card/Card";
-import { SegmentedControl } from "@/shared/ui/segmented-control/SegmentedControl";
-import { Select } from "@/shared/ui/select/Select";
+import type { AudioDeviceOption, MicChannelView } from "@/shared/components/dual-mic-panel";
+import {
+  Badge,
+  type BadgeProps,
+  Banner,
+  Button,
+  Card,
+  Meter,
+  SegmentedControl,
+  Select,
+} from "@/shared/ui";
 import { workspaceControlBarStyles as s } from "./WorkspaceControlBar.styles";
 
 export interface WorkspaceControlBarProps {
@@ -151,16 +153,14 @@ export function WorkspaceControlBar({
               </div>
 
               <div {...stylex.props(s.channelStatusRow)}>
-                <div
-                  role="progressbar"
-                  aria-label={channel.levelLabel}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={percent}
-                  {...stylex.props(s.meterTrack)}
-                >
-                  <div style={{ width: `${percent}%` }} {...stylex.props(s.meterFill)} />
-                </div>
+                <Meter
+                  label={channel.levelLabel}
+                  value={percent}
+                  hideLabel
+                  size="sm"
+                  tone={channel.isSpeaking ? "tertiary" : "primary"}
+                  style={s.channelMeter}
+                />
 
                 <Badge tone={channel.isSpeaking ? "success" : "neutral"}>
                   {channel.isSpeaking ? channel.speakingLabel : channel.idleLabel}
@@ -171,12 +171,16 @@ export function WorkspaceControlBar({
         })}
       </div>
 
-      {infoNotice ? <div {...stylex.props(s.noticeBox)}>{infoNotice}</div> : null}
+      {infoNotice ? (
+        <Banner tone="info" size="sm">
+          {infoNotice}
+        </Banner>
+      ) : null}
 
       {errorMessage ? (
-        <div role="alert" {...stylex.props(s.errorBox)}>
+        <Banner tone="danger" size="sm" role="alert">
           {errorMessage}
-        </div>
+        </Banner>
       ) : null}
     </div>
   );

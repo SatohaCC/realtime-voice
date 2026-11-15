@@ -2,20 +2,31 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Badge } from "@/shared/ui/badge/Badge";
+import { Badge, Button, IconButton, Select } from "@/shared/ui";
 import { transcriptChatStyles as s } from "./TranscriptChat.styles";
+
+export type TranscriptSpeakerId = string;
+
+export interface TranscriptSpeakerOption {
+  value: TranscriptSpeakerId;
+  label: string;
+}
 
 export interface TranscriptChatSegment {
   streamId: string;
   segmentId: string;
   channelIndex: 0 | 1;
   align?: "left" | "right";
+  speakerId?: TranscriptSpeakerId;
+  /** 話者の確度が低い表示にするか。識別子の値からは推測しない。 */
+  isSpeakerUncertain?: boolean;
   roleName: string;
   micLabel?: string;
   timeLabel: string;
   text: string;
   status: "interim" | "final" | "refined";
   statusLabel: string;
+  disabled?: boolean;
 }
 
 export interface TranscriptChatProps {
@@ -25,12 +36,28 @@ export interface TranscriptChatProps {
   emptyMessage: string;
   scrollToBottomLabel: string;
   highlightedSegmentKey?: string | null;
+  speakerOptions?: readonly TranscriptSpeakerOption[];
+  getSpeakerSelectLabel?: (turn: { timeLabel: string; roleName: string }) => string;
+  onChangeSegmentSpeaker?: (
+    streamId: string,
+    segmentId: string,
+    speakerId: TranscriptSpeakerId,
+  ) => void;
+  getSegmentToggleLabel?: (segment: {
+    timeLabel: string;
+    text: string;
+    disabled: boolean;
+  }) => string;
+  onSetSegmentEnabled?: (streamId: string, segmentId: string, enabled: boolean) => void;
+  segmentActionsDisabled?: boolean;
 }
 
 interface GroupedTurn {
   turnKey: string;
   channelIndex: 0 | 1;
   align: "left" | "right";
+  speakerId?: TranscriptSpeakerId;
+  isSpeakerUncertain?: boolean;
   roleName: string;
   micLabel?: string;
   timeLabel: string;
@@ -57,7 +84,10 @@ export function groupTranscriptTurns(
       !isInterim &&
       !last.isInterim &&
       last.channelIndex === segment.channelIndex &&
-      last.align === align
+      last.align === align &&
+      last.speakerId === segment.speakerId &&
+      Boolean(last.isSpeakerUncertain) === Boolean(segment.isSpeakerUncertain) &&
+      last.roleName === segment.roleName
     ) {
       groups[groups.length - 1] = {
         ...last,
@@ -69,6 +99,8 @@ export function groupTranscriptTurns(
       turnKey: key,
       channelIndex: segment.channelIndex,
       align,
+      speakerId: segment.speakerId,
+      isSpeakerUncertain: segment.isSpeakerUncertain,
       roleName: segment.roleName,
       micLabel: segment.micLabel,
       timeLabel: segment.timeLabel,
@@ -97,8 +129,14 @@ export function TranscriptChat({
   emptyMessage,
   scrollToBottomLabel,
   highlightedSegmentKey = null,
+  speakerOptions,
+  getSpeakerSelectLabel,
+  onChangeSegmentSpeaker,
+  getSegmentToggleLabel,
+  onSetSegmentEnabled,
+  segmentActionsDisabled = false,
 }: TranscriptChatProps) {
-  const scrollerRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLElement>(null);
   const segmentRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
   const isAtBottomRef = useRef(true);
   const [hasUnreadBelow, setHasUnreadBelow] = useState(false);
@@ -157,19 +195,19 @@ export function TranscriptChat({
   }, []);
 
   return (
-    <section aria-labelledby="transcript-chat-heading" {...stylex.props(s.root)}>
+    <div {...stylex.props(s.root)}>
       <div data-pane-header {...stylex.props(s.header)}>
         <div {...stylex.props(s.titleGroup)}>
-          <h2 id="transcript-chat-heading" {...stylex.props(s.title)}>
-            {title}
-          </h2>
+          <h2 {...stylex.props(s.title)}>{title}</h2>
           {countLabel ? <Badge tone="neutral">{countLabel}</Badge> : null}
         </div>
       </div>
 
       <div {...stylex.props(s.scrollerWrap)}>
-        <div
+        <section
           ref={scrollerRef}
+          aria-label={title}
+          tabIndex={turns.length > 0 ? 0 : undefined}
           onScroll={handleScroll}
           data-testid="transcript-chat-scroller"
           {...stylex.props(s.scroller)}
@@ -180,16 +218,56 @@ export function TranscriptChat({
             <ul aria-label={title} {...stylex.props(s.turnList)}>
               {turns.map((turn) => {
                 const isRight = turn.align === "right";
+                const isUnknown = turn.isSpeakerUncertain;
+                const roleChipStyle = isUnknown
+                  ? s.roleChipUnknown
+                  : isRight
+                    ? s.roleChipRight
+                    : s.roleChipLeft;
+                const bubbleAlignStyle = isUnknown
+                  ? s.bubbleUnknown
+                  : isRight
+                    ? s.bubbleRight
+                    : s.bubbleLeft;
+                const canChangeSpeaker =
+                  Boolean(onChangeSegmentSpeaker) &&
+                  !turn.isInterim &&
+                  Boolean(turn.speakerId) &&
+                  Boolean(speakerOptions && speakerOptions.length > 0);
                 return (
                   <li
                     key={turn.turnKey}
                     data-align={turn.align}
+                    data-speaker-id={turn.speakerId}
+                    data-speaker-uncertain={turn.isSpeakerUncertain || undefined}
                     {...stylex.props(s.turnRow, isRight ? s.turnRowRight : s.turnRowLeft)}
                   >
                     <div {...stylex.props(s.turnMeta)}>
-                      <span {...stylex.props(isRight ? s.roleChipRight : s.roleChipLeft)}>
-                        {turn.roleName}
-                      </span>
+                      {canChangeSpeaker && turn.speakerId && speakerOptions ? (
+                        <Select
+                          size="sm"
+                          hideLabel
+                          label={
+                            getSpeakerSelectLabel?.({
+                              timeLabel: turn.timeLabel,
+                              roleName: turn.roleName,
+                            }) ?? `${turn.timeLabel} (${turn.roleName})`
+                          }
+                          options={speakerOptions}
+                          value={turn.speakerId}
+                          disabled={segmentActionsDisabled}
+                          onValueChange={(nextValue) => {
+                            if (!nextValue || !onChangeSegmentSpeaker) return;
+                            const nextRole = nextValue;
+                            for (const item of turn.items) {
+                              onChangeSegmentSpeaker(item.streamId, item.segmentId, nextRole);
+                            }
+                          }}
+                          triggerStyle={[s.roleSelectTrigger, roleChipStyle]}
+                        />
+                      ) : (
+                        <span {...stylex.props(roleChipStyle)}>{turn.roleName}</span>
+                      )}
                       {turn.micLabel ? (
                         <span {...stylex.props(s.micText)}>{turn.micLabel}</span>
                       ) : null}
@@ -200,7 +278,7 @@ export function TranscriptChat({
                       aria-live={turn.isInterim ? "off" : undefined}
                       {...stylex.props(
                         s.bubble,
-                        isRight ? s.bubbleRight : s.bubbleLeft,
+                        bubbleAlignStyle,
                         turn.isInterim && s.bubbleInterim,
                       )}
                     >
@@ -208,26 +286,73 @@ export function TranscriptChat({
                         {turn.items.map((segment) => {
                           const segKey = `${segment.streamId}:${segment.segmentId}`;
                           const isHighlighted = highlightedSegmentKey === segKey;
+                          const canSetSegmentEnabled =
+                            Boolean(onSetSegmentEnabled) && segment.status !== "interim";
                           return (
-                            <span
-                              key={segKey}
-                              ref={(node) => {
-                                if (node) {
-                                  segmentRefs.current.set(segKey, node);
-                                } else {
-                                  segmentRefs.current.delete(segKey);
-                                }
-                              }}
-                              data-segment-key={segKey}
-                              data-highlighted={isHighlighted ? "true" : undefined}
-                              {...stylex.props(
-                                s.segmentText,
-                                segment.status === "interim" && s.segmentTextInterim,
-                                isHighlighted && s.segmentTextHighlighted,
-                              )}
-                            >
-                              {segment.text}
-                            </span>
+                            <div key={segKey} {...stylex.props(s.segmentRow)}>
+                              <span
+                                ref={(node) => {
+                                  if (node) {
+                                    segmentRefs.current.set(segKey, node);
+                                  } else {
+                                    segmentRefs.current.delete(segKey);
+                                  }
+                                }}
+                                data-segment-key={segKey}
+                                data-disabled={segment.disabled ? "true" : undefined}
+                                data-highlighted={isHighlighted ? "true" : undefined}
+                                {...stylex.props(
+                                  s.segmentText,
+                                  segment.status === "interim" && s.segmentTextInterim,
+                                  segment.disabled && s.segmentTextDisabled,
+                                  isHighlighted && s.segmentTextHighlighted,
+                                )}
+                              >
+                                {segment.disabled ? <s>{segment.text}</s> : segment.text}
+                              </span>
+                              {canSetSegmentEnabled && onSetSegmentEnabled ? (
+                                <IconButton
+                                  variant="standard"
+                                  size="sm"
+                                  disabled={segmentActionsDisabled}
+                                  pressed={Boolean(segment.disabled)}
+                                  aria-label={
+                                    getSegmentToggleLabel?.({
+                                      timeLabel: segment.timeLabel,
+                                      text: segment.text,
+                                      disabled: Boolean(segment.disabled),
+                                    }) ?? `${segment.timeLabel} ${segment.text}`
+                                  }
+                                  onClick={() =>
+                                    onSetSegmentEnabled(
+                                      segment.streamId,
+                                      segment.segmentId,
+                                      Boolean(segment.disabled),
+                                    )
+                                  }
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    aria-hidden="true"
+                                  >
+                                    <path
+                                      d={
+                                        segment.disabled
+                                          ? "M3 10h11a6 6 0 0 1 0 12M3 10l6-6M3 10l6 6"
+                                          : "M5 12h14"
+                                      }
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                </IconButton>
+                              ) : null}
+                            </div>
                           );
                         })}
                       </div>
@@ -237,16 +362,16 @@ export function TranscriptChat({
               })}
             </ul>
           )}
-        </div>
+        </section>
 
         {hasUnreadBelow ? (
           <div {...stylex.props(s.jumpBannerWrap)}>
-            <button type="button" onClick={scrollToBottom} {...stylex.props(s.jumpButton)}>
+            <Button variant="filled" size="sm" onClick={scrollToBottom} style={s.jumpButton}>
               {scrollToBottomLabel}
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>
-    </section>
+    </div>
   );
 }

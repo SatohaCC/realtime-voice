@@ -4,20 +4,23 @@ import * as stylex from "@stylexjs/stylex";
 import { useRouter } from "next/navigation";
 import type { ComponentProps } from "react";
 import { useCallback, useEffect, useState } from "react";
-import type { MicChannelView } from "@/shared/components/dual-mic-panel/DualMicPanel";
+import { useSpeakerEnrollment } from "@/features/speaker/useSpeakerEnrollment";
 import {
+  type MicChannelView,
   type SoapItemBadge,
   SoapPanel,
   type SoapPanelSectionView,
-} from "@/shared/components/soap-panel/SoapPanel";
-import {
   TranscriptChat,
   type TranscriptChatSegment,
-} from "@/shared/components/transcript-chat/TranscriptChat";
-import { WorkspaceControlBar } from "@/shared/components/workspace-control-bar/WorkspaceControlBar";
+  WorkspaceControlBar,
+} from "@/shared/components";
 import { formatSoapNoteAsText } from "@/shared/lib/conversation/soapClipboard";
-import type { SoapLifecycleStatus, SoapSectionKey } from "@/shared/lib/conversation/types";
-import { Badge, type BadgeProps } from "@/shared/ui/badge/Badge";
+import type {
+  SoapLifecycleStatus,
+  SoapSectionKey,
+  SpeakerRole,
+} from "@/shared/lib/conversation/types";
+import { Badge, type BadgeProps } from "@/shared/ui";
 import { realtimeTranscriptionContainerStyles as s } from "./RealtimeTranscriptionContainer.styles";
 import { useRealtimeTranscription } from "./useRealtimeTranscription";
 
@@ -170,11 +173,18 @@ const SECTION_DEFINITIONS: readonly {
   },
 ];
 
+function speakerIdLabel(role: SpeakerRole): string {
+  if (role === "pharmacist") return "薬剤師";
+  if (role === "patient") return "患者";
+  return "話者不明";
+}
+
 /**
  * 2マイク音声取得・チャット風リアルタイム文字起こし・固定4欄 SOAP を左右 50:50 で接続する Container。
  */
 export function RealtimeTranscriptionContainer() {
   const router = useRouter();
+  const speaker = useSpeakerEnrollment();
   const {
     audio,
     segments,
@@ -185,7 +195,14 @@ export function RealtimeTranscriptionContainer() {
     error,
     toggleTranscription,
     startNewConversation,
+    updateSegmentSpeaker,
+    setSegmentEnabled,
+    isSegmentUpdatePending,
   } = useRealtimeTranscription({
+    speakerProfile: speaker.voiceprint
+      ? { modelId: speaker.voiceprint.modelId, embedding: speaker.voiceprint.embedding }
+      : null,
+    onSpeakerProfileRejected: speaker.reportProfileRejected,
     onAuthInvalidated: () => {
       router.replace("/login?next=/transcription");
     },
@@ -273,10 +290,14 @@ export function RealtimeTranscriptionContainer() {
           segmentId: segment.segment_id,
           channelIndex: segment.channel_index,
           align: segment.speaker_role === "pharmacist" ? "right" : "left",
-          roleName: segment.speaker_role === "pharmacist" ? "薬剤師" : "患者",
+          speakerId: segment.speaker_role === "unknown" ? "patient" : segment.speaker_role,
+          roleName: speakerIdLabel(
+            segment.speaker_role === "unknown" ? "patient" : segment.speaker_role,
+          ),
           timeLabel: formatTimestamp(segment.start_sec),
           text: segment.text,
           status: segment.status,
+          disabled: segment.disabled,
           statusLabel: STATUS_LABELS[segment.status],
         }))
       : segments.map((segment) => ({
@@ -288,6 +309,7 @@ export function RealtimeTranscriptionContainer() {
           timeLabel: formatTimestamp(segment.startSec),
           text: segment.text,
           status: segment.status,
+          disabled: segment.disabled,
           statusLabel: STATUS_LABELS[segment.status],
         }));
 
@@ -320,7 +342,7 @@ export function RealtimeTranscriptionContainer() {
         evidences: item.evidence.map((ev) => ({
           streamId: ev.stream_id,
           segmentId: ev.segment_id,
-          speakerLabel: ev.speaker_role === "pharmacist" ? "薬剤師" : "患者",
+          speakerLabel: speakerIdLabel(ev.speaker_role),
           quote: ev.quote,
         })),
       };
@@ -401,7 +423,7 @@ export function RealtimeTranscriptionContainer() {
         onNewConversation: startNewConversation,
         statsText,
         infoNotice,
-        errorMessage: error,
+        errorMessage: error ?? speaker.error,
       }}
       transcriptChat={{
         title: "文字起こし",
@@ -411,6 +433,23 @@ export function RealtimeTranscriptionContainer() {
           "「文字起こし開始」を押して話しかけると、患者（左）と薬剤師（右）の会話が表示されます。",
         scrollToBottomLabel: "↓ 新しい発話",
         highlightedSegmentKey,
+        speakerOptions: [
+          { value: "pharmacist", label: "薬剤師" },
+          { value: "patient", label: "患者" },
+        ],
+        getSpeakerSelectLabel: ({ timeLabel }) => `${timeLabel} の話者を変更`,
+        onChangeSegmentSpeaker:
+          audio.mode === "dual" && isStreaming
+            ? (streamId, segmentId, speakerId) => {
+                if (speakerId === "pharmacist" || speakerId === "patient") {
+                  updateSegmentSpeaker(streamId, segmentId, speakerId);
+                }
+              }
+            : undefined,
+        getSegmentToggleLabel: ({ timeLabel, text, disabled }) =>
+          `${timeLabel} の発話「${text}」を${disabled ? "有効に戻す" : "無効化"}`,
+        segmentActionsDisabled: isSegmentUpdatePending,
+        onSetSegmentEnabled: !isConnecting && !isStopping ? setSegmentEnabled : undefined,
       }}
       soapPanel={{
         title: "SOAP",

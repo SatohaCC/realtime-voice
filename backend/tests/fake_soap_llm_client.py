@@ -155,7 +155,7 @@ class FakeSoapLlmClient:
             max_input_chars if max_input_chars is not None else settings.soap_llm_max_input_chars
         )
 
-    async def extract_spoa(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
         serialize_untrusted_payload(payload, max_chars=self._max_input_chars)
         new_segments = payload.get("new_segments", [])
         current_soap = payload.get("current_soap", {})

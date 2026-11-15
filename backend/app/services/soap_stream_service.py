@@ -3,10 +3,12 @@ import json
 import time
 import uuid
 from collections import OrderedDict, deque
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
+
+from pydantic import ValidationError
 
 from app.clients.deepgram_client import (
     DeepgramClientError,
@@ -17,6 +19,11 @@ from app.clients.soap_llm_client import (
     SoapLlmClientProtocol,
     get_default_soap_llm_client,
 )
+from app.clients.speaker_embedding_client import (
+    SpeakerEmbeddingClientError,
+    SpeakerEmbeddingClientProtocol,
+    get_default_speaker_embedding_client,
+)
 from app.core.config import settings
 from app.schemas.soap import (
     ConversationCompletedEvent,
@@ -24,15 +31,28 @@ from app.schemas.soap import (
     SoapLifecycleStatus,
     SoapStatusEvent,
     SoapUpdatedEvent,
+    SpeakerRole,
+    TranscriptSegmentModel,
     TranscriptUpdatedEvent,
+)
+from app.schemas.speaker import (
+    SegmentSpeakerOverrideFrame,
+    SetConversationSegmentEnabledResponse,
+    SetSegmentEnabledFrame,
+    SpeakerProfileAckEvent,
+    SpeakerProfileFrame,
 )
 from app.schemas.transcription import TranscriptionErrorEvent, TranscriptionStreamConfig
 from app.services.audio_vad_service import AudioActivityGate, AudioGateConfig
 from app.services.conversation_service import (
     ConversationTranscriptState,
     DeepgramTranscriptInput,
+    DeepgramWordTiming,
+    build_word_clause_candidates,
+    join_deepgram_words,
 )
-from app.services.soap_service import SoapStateManager
+from app.services.soap_service import SoapApplyOutcome, SoapStateManager
+from app.services.speaker_audio_service import select_speaker_audio
 
 _QueuePriority = Literal["high", "status", "interim"]
 
@@ -105,6 +125,7 @@ class ConversationSessionRecord:
     conversation_id: str
     transcript_state: ConversationTranscriptState
     soap_manager: SoapStateManager
+    llm_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     event_seq: int = 0
     active_generation: int = 0
     superseded: asyncio.Event = field(default_factory=asyncio.Event)
@@ -147,8 +168,25 @@ class ConversationSessionRegistry:
         )
         self._records[key] = record
         while len(self._records) > self._max_entries:
-            self._records.popitem(last=False)
+            _, evicted = self._records.popitem(last=False)
+            evicted.transcript_state.clear_speaker_memory()
         return record
+
+    def get(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        now_monotonic: float | None = None,
+    ) -> ConversationSessionRecord | None:
+        now = now_monotonic if now_monotonic is not None else time.monotonic()
+        self._evict_expired(now)
+        key = (user_id, conversation_id)
+        existing = self._records.get(key)
+        if existing is not None:
+            existing.last_touched_monotonic = now
+            self._records.move_to_end(key)
+        return existing
 
     def _evict_expired(self, now: float) -> None:
         expired_keys = [
@@ -157,7 +195,9 @@ class ConversationSessionRegistry:
             if now - record.last_touched_monotonic > self._ttl_seconds
         ]
         for key in expired_keys:
-            self._records.pop(key, None)
+            evicted = self._records.pop(key, None)
+            if evicted is not None:
+                evicted.transcript_state.clear_speaker_memory()
 
 
 _DEFAULT_REGISTRY = ConversationSessionRegistry()
@@ -166,6 +206,153 @@ _DEFAULT_REGISTRY = ConversationSessionRegistry()
 def get_default_conversation_registry() -> ConversationSessionRegistry:
     """既定のインメモリ会話レジストリを返す。"""
     return _DEFAULT_REGISTRY
+
+
+async def set_conversation_segment_enabled(
+    *,
+    user_id: str,
+    conversation_id: str,
+    stream_id: str,
+    segment_id: str,
+    enabled: bool,
+    registry: ConversationSessionRegistry | None = None,
+    llm_client: SoapLlmClientProtocol | None = None,
+    on_applied: Callable[[SetConversationSegmentEnabledResponse], None] | None = None,
+) -> tuple[TranscriptSegmentModel, SoapApplyOutcome, ConversationSessionRecord] | None:
+    """停止中の原文有効性を変更し、有効な発話だけでSOAPを再生成する。"""
+    record = (registry or get_default_conversation_registry()).get(
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
+    if record is None:
+        return None
+    effective_llm = llm_client if llm_client is not None else get_default_soap_llm_client()
+    coordinator = _SoapSessionCoordinator(
+        record=record,
+        stream_id=stream_id,
+        generation=record.active_generation,
+        queue=BoundedWsOutboundQueue(maxsize=64),
+        llm_client=effective_llm,
+        timing=SoapTimingOptions.from_settings(),
+    )
+    updated = coordinator.handle_segment_enabled(
+        {
+            "type": "SetSegmentEnabled",
+            "stream_id": stream_id,
+            "segment_id": segment_id,
+            "enabled": enabled,
+        }
+    )
+    if updated is None:
+        return None
+    if on_applied is not None:
+        on_applied(
+            SetConversationSegmentEnabledResponse(
+                conversation_id=conversation_id,
+                segment=updated,
+                soap=record.soap_manager.note,
+                soap_status=record.soap_status,
+                has_unapplied_transcript=record.has_unapplied_transcript,
+            )
+        )
+    if record.transcript_state.finalized_segments and coordinator._llm_client is not None:
+        ok = await coordinator._run_extract_step(retries=0)
+        if ok and coordinator.is_current():
+            await coordinator._run_finalize_a_step()
+    return updated, SoapApplyOutcome(record.soap_manager.note, [], [], 0, 0), record
+
+
+async def stream_conversation_segment_enabled(
+    *,
+    user_id: str,
+    conversation_id: str,
+    stream_id: str,
+    segment_id: str,
+    enabled: bool,
+    registry: ConversationSessionRegistry | None = None,
+    llm_client: SoapLlmClientProtocol | None = None,
+) -> AsyncGenerator[SetConversationSegmentEnabledResponse]:
+    """有効性の確定を先に通知し、LLM再生成の結果を同じ応答で後から通知する。"""
+    queue: asyncio.Queue[SetConversationSegmentEnabledResponse | Exception | None] = asyncio.Queue()
+
+    async def run() -> None:
+        try:
+            result = await set_conversation_segment_enabled(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                stream_id=stream_id,
+                segment_id=segment_id,
+                enabled=enabled,
+                registry=registry,
+                llm_client=llm_client,
+                on_applied=queue.put_nowait,
+            )
+            if result is not None:
+                segment, outcome, record = result
+                queue.put_nowait(
+                    SetConversationSegmentEnabledResponse(
+                        conversation_id=conversation_id,
+                        segment=segment,
+                        soap=outcome.soap,
+                        changed_item_ids=outcome.changed_item_ids,
+                        retracted_item_ids=outcome.retracted_item_ids,
+                        soap_status=record.soap_status,
+                        has_unapplied_transcript=record.has_unapplied_transcript,
+                    )
+                )
+        except Exception as exc:
+            queue.put_nowait(exc)
+        finally:
+            queue.put_nowait(None)
+
+    task = asyncio.create_task(run())
+    try:
+        while True:
+            update = await queue.get()
+            if update is None:
+                return
+            if isinstance(update, Exception):
+                raise update
+            yield update
+    finally:
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+def _parse_deepgram_word_timings(alt0: dict[object, object]) -> tuple[DeepgramWordTiming, ...]:
+    raw_words = alt0.get("words")
+    if not isinstance(raw_words, list):
+        return ()
+    words: list[DeepgramWordTiming] = []
+    for item in raw_words:
+        if not isinstance(item, dict):
+            continue
+        word_text = str(item.get("punctuated_word") or item.get("word") or "").strip()
+        raw_w_start = item.get("start")
+        raw_w_end = item.get("end")
+        raw_w_conf = item.get("confidence")
+        if (
+            not word_text
+            or not isinstance(raw_w_start, int | float)
+            or not isinstance(raw_w_end, int | float)
+        ):
+            continue
+        w_start = max(0.0, float(raw_w_start))
+        w_end = max(w_start, float(raw_w_end))
+        if w_end <= w_start:
+            continue
+        w_conf = float(raw_w_conf) if isinstance(raw_w_conf, int | float) else 0.0
+        words.append(
+            DeepgramWordTiming(
+                text=word_text,
+                start_sec=w_start,
+                end_sec=w_end,
+                confidence=max(0.0, min(1.0, w_conf)),
+            )
+        )
+    return tuple(words)
 
 
 def _parse_deepgram_transcript_input(raw_text: str) -> DeepgramTranscriptInput | None:
@@ -208,6 +395,7 @@ def _parse_deepgram_transcript_input(raw_text: str) -> DeepgramTranscriptInput |
         start_sec=max(0.0, start_sec),
         end_sec=max(0.0, start_sec + max(0.0, duration_sec)),
         confidence=max(0.0, min(1.0, confidence)),
+        words=_parse_deepgram_word_timings(alt0),
     )
 
 
@@ -252,6 +440,7 @@ class _SoapSessionCoordinator:
         timing: SoapTimingOptions,
         audio_gate: AudioActivityGate | None = None,
         mono_mix: bool = False,
+        speaker_client: SpeakerEmbeddingClientProtocol | None = None,
     ) -> None:
         self._record = record
         self._stream_id = stream_id
@@ -261,12 +450,13 @@ class _SoapSessionCoordinator:
         self._timing = timing
         self._audio_gate = audio_gate
         self._mono_mix = mono_mix
+        self._speaker_client = speaker_client
         self._wakeup = asyncio.Event()
         self._pending_since: float | None = None
         self._has_speech_final_trigger = False
         self._last_llm_start: float = 0.0
         self._stopping = False
-        self._llm_lock = asyncio.Lock()
+        self._llm_lock = record.llm_lock
         self._failed_extract_revision: int | None = None
 
     def is_current(self) -> bool:
@@ -327,12 +517,143 @@ class _SoapSessionCoordinator:
         )
         self._queue.enqueue(event.model_dump_json(), priority="status")
 
-    def handle_deepgram_message(self, raw_text: str) -> None:
+    def handle_speaker_profile_message(self, raw_payload: dict[str, object]) -> None:
+        """クライアントから届いた端末ローカル薬剤師声紋を会話の一時メモリへ反映する。"""
         if not self.is_current():
             return
+        try:
+            frame = SpeakerProfileFrame.model_validate(raw_payload)
+        except ValidationError:
+            ack = SpeakerProfileAckEvent(
+                accepted=False,
+                model_id=str(raw_payload.get("model_id") or ""),
+                reason="声紋フレームの形式が不正です。",
+            )
+            self._queue.enqueue(ack.model_dump_json(), priority="status")
+            return
+
+        accepted, reason = self._record.transcript_state.set_pharmacist_profile(
+            model_id=frame.model_id,
+            embedding=frame.embedding,
+        )
+        ack = SpeakerProfileAckEvent(
+            accepted=accepted,
+            model_id=frame.model_id,
+            reason=reason,
+        )
+        self._queue.enqueue(ack.model_dump_json(), priority="status")
+
+    def handle_segment_speaker_override(self, raw_payload: dict[str, object]) -> None:
+        """クライアント UI からの手動話者訂正を反映し、SOAP 整合・再抽出を起動する。"""
+        if not self.is_current():
+            return
+        try:
+            frame = SegmentSpeakerOverrideFrame.model_validate(raw_payload)
+        except ValidationError:
+            return
+
+        updated = self._record.transcript_state.override_segment_speaker(
+            stream_id=frame.stream_id,
+            segment_id=frame.segment_id,
+            speaker_role=frame.speaker_role,
+        )
+        if updated is None:
+            return
+
+        event = TranscriptUpdatedEvent(
+            protocol_version=self._timing.protocol_version,
+            conversation_id=self._record.conversation_id,
+            event_id=self._event_id(),
+            sequence=self._next_seq(),
+            segment=updated,
+            removed=False,
+        )
+        self._queue.enqueue(event.model_dump_json(), priority="high")
+        if updated.disabled:
+            return
+        self._reconcile_soap_with_transcript()
+
+        if self._llm_client is not None and updated.speaker_role in {"pharmacist", "patient"}:
+            if self._pending_since is None:
+                self._pending_since = time.monotonic()
+            if self._record.pending_from_transcript_revision is None:
+                self._record.pending_from_transcript_revision = updated.transcript_revision
+            self._has_speech_final_trigger = True
+            self._record.has_unapplied_transcript = True
+            if self._record.soap_status not in {"updating", "pending"}:
+                self.enqueue_soap_status(status="pending", has_unapplied_transcript=True)
+            self._wakeup.set()
+
+    def _reset_soap_for_transcript_change(self) -> None:
+        """旧本文を即時に撤回し、残る有効発話の全体再生成を予約する。"""
+        outcome = self._record.soap_manager.reset_for_rebuild()
+        self._queue.enqueue(
+            SoapUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                soap=outcome.soap,
+                changed_item_ids=[],
+                retracted_item_ids=outcome.retracted_item_ids,
+            ).model_dump_json(),
+            priority="high",
+        )
+        self._failed_extract_revision = None
+        active = self._record.transcript_state.finalized_segments
+        self._record.pending_from_transcript_revision = min(
+            (seg.transcript_revision for seg in active), default=None
+        )
+        self._pending_since = time.monotonic() if active else None
+        self._has_speech_final_trigger = bool(active)
+        self.enqueue_soap_status(
+            status=("pending" if active else "ready")
+            if self._llm_client is not None
+            else "disabled",
+            has_unapplied_transcript=bool(active),
+        )
+        self._wakeup.set()
+
+    def handle_segment_enabled(
+        self, raw_payload: dict[str, object]
+    ) -> TranscriptSegmentModel | None:
+        """原文を消さずに有効性を変更し、SOAPを再生成する。"""
+        if not self.is_current():
+            return None
+        try:
+            frame = SetSegmentEnabledFrame.model_validate(raw_payload)
+        except ValidationError:
+            return None
+        previous = self._record.transcript_state.get_segment(
+            stream_id=frame.stream_id, segment_id=frame.segment_id
+        )
+        updated = self._record.transcript_state.set_segment_enabled(
+            stream_id=frame.stream_id,
+            segment_id=frame.segment_id,
+            enabled=frame.enabled,
+        )
+        if updated is None:
+            return None
+        if previous is not None and previous.disabled == updated.disabled:
+            return updated
+        self._queue.enqueue(
+            TranscriptUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                segment=updated,
+                removed=False,
+            ).model_dump_json(),
+            priority="high",
+        )
+        self._reset_soap_for_transcript_change()
+        return updated
+
+    def _parse_and_resolve_gate(self, raw_text: str) -> DeepgramTranscriptInput | None:
         parsed = _parse_deepgram_transcript_input(raw_text)
         if parsed is None:
-            return
+            return None
         if self._audio_gate is not None:
             resolved = self._audio_gate.resolve_stt_interval(parsed.start_sec, parsed.end_sec)
             if resolved is not None:
@@ -341,7 +662,26 @@ class _SoapSessionCoordinator:
                     if (self._mono_mix and resolved.dominant_channel is not None)
                     else parsed.channel_index
                 )
-                parsed = DeepgramTranscriptInput(
+                offset = resolved.real_start_sec - parsed.start_sec
+                shifted_words = tuple(
+                    DeepgramWordTiming(
+                        text=w.text,
+                        start_sec=max(
+                            resolved.real_start_sec,
+                            min(resolved.real_end_sec, w.start_sec + offset),
+                        ),
+                        end_sec=max(
+                            max(
+                                resolved.real_start_sec,
+                                min(resolved.real_end_sec, w.start_sec + offset),
+                            ),
+                            min(resolved.real_end_sec, w.end_sec + offset),
+                        ),
+                        confidence=w.confidence,
+                    )
+                    for w in parsed.words
+                )
+                return DeepgramTranscriptInput(
                     channel_index=next_channel,
                     text=parsed.text,
                     is_final=parsed.is_final,
@@ -349,34 +689,251 @@ class _SoapSessionCoordinator:
                     start_sec=resolved.real_start_sec,
                     end_sec=resolved.real_end_sec,
                     confidence=parsed.confidence,
+                    words=shifted_words,
                 )
+        return parsed
+
+    def _extract_embedding_for_interval(
+        self,
+        *,
+        channel_index: int,
+        start_sec: float,
+        end_sec: float,
+    ) -> list[float] | None:
+        if self._speaker_client is None or self._mono_mix:
+            return None
+        sliced = self._record.transcript_state.slice_pcm16(start_sec, end_sec)
+        if sliced is None:
+            return None
+        pcm_bytes, channels, sample_rate = sliced
+        channel_idx = 1 if channel_index == 1 and channels == 2 else 0
+        selected = select_speaker_audio(
+            pcm_bytes, sample_rate=sample_rate, channels=channels, channel_index=channel_idx
+        )
+        if (
+            selected.voiced_sec < settings.speaker_min_embed_seconds
+            or selected.clipped_fraction >= 0.01
+        ):
+            return None
+        try:
+            return self._speaker_client.extract_embedding_from_pcm16(
+                selected.pcm16_bytes,
+                sample_rate=sample_rate,
+                channels=1,
+                channel_index=0,
+            )
+        except SpeakerEmbeddingClientError:
+            return None
+
+    def _extract_embedding_for_event(self, parsed: DeepgramTranscriptInput) -> list[float] | None:
+        if self._speaker_client is None or self._mono_mix:
+            return None
+        if not self._record.transcript_state.needs_speaker_embedding(parsed):
+            return None
+        start_sec, end_sec = self._record.transcript_state.speaker_embedding_interval(parsed)
+        return self._extract_embedding_for_interval(
+            channel_index=parsed.channel_index,
+            start_sec=start_sec,
+            end_sec=end_sec,
+        )
+
+    def _resolve_events_for_final(
+        self, parsed: DeepgramTranscriptInput
+    ) -> list[tuple[DeepgramTranscriptInput, list[float] | None]]:
+        """確定発話を必要に応じ words[] の話者交代境界で分割し、各区間の埋め込みと共に返す。"""
+        if self._speaker_client is None or self._mono_mix:
+            return [(parsed, None)]
+
+        if self._record.transcript_state.needs_turn_split_probe(parsed):
+            clauses = build_word_clause_candidates(
+                parsed.words,
+                min_chunk_sec=settings.speaker_min_embed_seconds,
+            )
+            if len(clauses) >= 2:
+                probed: list[
+                    tuple[tuple[DeepgramWordTiming, ...], SpeakerRole, list[float] | None]
+                ] = []
+                for clause_words in clauses:
+                    c_start = clause_words[0].start_sec
+                    c_end = clause_words[-1].end_sec
+                    emb = self._extract_embedding_for_interval(
+                        channel_index=parsed.channel_index,
+                        start_sec=c_start,
+                        end_sec=c_end,
+                    )
+                    role = self._record.transcript_state.classify_probe_segment(
+                        channel_index=parsed.channel_index,
+                        start_sec=c_start,
+                        end_sec=c_end,
+                        segment_embedding=emb,
+                    )
+                    probed.append((clause_words, role, emb))
+
+                known_roles = {role for _, role, _ in probed if role in {"pharmacist", "patient"}}
+                if len(known_roles) >= 2:
+                    merged: list[
+                        tuple[list[DeepgramWordTiming], SpeakerRole, list[float] | None]
+                    ] = []
+                    for clause_words, role, emb in probed:
+                        if merged and merged[-1][1] == role:
+                            merged[-1][0].extend(clause_words)
+                            merged[-1] = (merged[-1][0], role, None)
+                        else:
+                            merged.append((list(clause_words), role, emb))
+
+                    resolved_turns: list[tuple[DeepgramTranscriptInput, list[float] | None]] = []
+                    last_idx = len(merged) - 1
+                    for idx, (turn_words, _, cached_emb) in enumerate(merged):
+                        t_start = turn_words[0].start_sec
+                        t_end = turn_words[-1].end_sec
+                        t_conf = sum(w.confidence for w in turn_words) / len(turn_words)
+                        sub_emb = (
+                            cached_emb
+                            if cached_emb is not None
+                            else self._extract_embedding_for_interval(
+                                channel_index=parsed.channel_index,
+                                start_sec=t_start,
+                                end_sec=t_end,
+                            )
+                        )
+                        sub_input = DeepgramTranscriptInput(
+                            channel_index=parsed.channel_index,
+                            text=join_deepgram_words(turn_words),
+                            is_final=True,
+                            speech_final=parsed.speech_final if idx == last_idx else False,
+                            start_sec=t_start,
+                            end_sec=t_end,
+                            confidence=t_conf if t_conf > 0 else parsed.confidence,
+                            words=tuple(turn_words),
+                        )
+                        resolved_turns.append((sub_input, sub_emb))
+                    return resolved_turns
+
+        emb = self._extract_embedding_for_event(parsed)
+        return [(parsed, emb)]
+
+    async def handle_deepgram_message_async(self, raw_text: str) -> None:
+        """イベントループを塞がずに話者埋め込みを抽出し、Deepgram メッセージを反映する。"""
+        if not self.is_current():
+            return
+        parsed = self._parse_and_resolve_gate(raw_text)
+        if parsed is None:
+            return
+        if self._speaker_client is not None and not self._mono_mix and parsed.is_final:
+            resolved_events = await asyncio.to_thread(self._resolve_events_for_final, parsed)
+            for sub_input, sub_emb in resolved_events:
+                self.handle_deepgram_message(
+                    raw_text,
+                    precomputed_embedding=sub_emb,
+                    resolved_input=sub_input,
+                )
+            return
+        self.handle_deepgram_message(
+            raw_text,
+            precomputed_embedding=None,
+            resolved_input=parsed,
+        )
+
+    def _reconcile_soap_with_transcript(self) -> None:
+        """後からの話者訂正・重複統合で既反映 SOAP の根拠が無効化された場合に自動補正する。"""
+        current_lookup = {
+            (seg.stream_id, seg.segment_id): seg
+            for seg in self._record.transcript_state.finalized_segments
+        }
+        outcome = self._record.soap_manager.reconcile_transcript_segments(current_lookup)
+        if outcome.applied_operations > 0 or outcome.retracted_item_ids:
+            updated_event = SoapUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                soap=outcome.soap,
+                changed_item_ids=outcome.changed_item_ids,
+                retracted_item_ids=outcome.retracted_item_ids,
+            )
+            self._queue.enqueue(updated_event.model_dump_json(), priority="high")
+
+        if outcome.retracted_item_ids:
+            # 訂正発話だけの差分抽出では、統合本文から撤回した他の発話を復元できない。
+            self._reset_soap_for_transcript_change()
+
+    def handle_deepgram_message(
+        self,
+        raw_text: str,
+        *,
+        precomputed_embedding: list[float] | None = None,
+        resolved_input: DeepgramTranscriptInput | None = None,
+    ) -> None:
+        if not self.is_current():
+            return
+        parsed = (
+            resolved_input if resolved_input is not None else self._parse_and_resolve_gate(raw_text)
+        )
+        if parsed is None:
+            return
         outcome = self._record.transcript_state.apply_deepgram_event(
             parsed,
             stream_id=self._stream_id,
             single_stream_diarized=self._mono_mix,
+            segment_embedding=precomputed_embedding,
         )
-        if outcome.segment is None:
-            return
+        if outcome.segment is not None:
+            event = TranscriptUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                segment=outcome.segment,
+                removed=outcome.removed,
+            )
+            priority: _QueuePriority = (
+                "interim"
+                if (outcome.segment.status == "interim" and not outcome.removed)
+                else "high"
+            )
+            self._queue.enqueue(event.model_dump_json(), priority=priority)
 
-        event = TranscriptUpdatedEvent(
-            protocol_version=self._timing.protocol_version,
-            conversation_id=self._record.conversation_id,
-            event_id=self._event_id(),
-            sequence=self._next_seq(),
-            segment=outcome.segment,
-            removed=outcome.removed,
-        )
-        priority: _QueuePriority = (
-            "interim" if (outcome.segment.status == "interim" and not outcome.removed) else "high"
-        )
-        self._queue.enqueue(event.model_dump_json(), priority=priority)
+        for refined_seg in outcome.refined_segments:
+            refined_event = TranscriptUpdatedEvent(
+                protocol_version=self._timing.protocol_version,
+                conversation_id=self._record.conversation_id,
+                event_id=self._event_id(),
+                sequence=self._next_seq(),
+                segment=refined_seg,
+                removed=False,
+            )
+            self._queue.enqueue(refined_event.model_dump_json(), priority="high")
 
-        if outcome.is_new_final and self._llm_client is not None:
+        for removed_seg in outcome.removed_segments:
+            self._queue.enqueue(
+                TranscriptUpdatedEvent(
+                    protocol_version=self._timing.protocol_version,
+                    conversation_id=self._record.conversation_id,
+                    event_id=self._event_id(),
+                    sequence=self._next_seq(),
+                    segment=removed_seg,
+                    removed=True,
+                ).model_dump_json(),
+                priority="high",
+            )
+
+        if outcome.removed_segments:
+            self._reset_soap_for_transcript_change()
+        elif outcome.refined_segments:
+            self._reconcile_soap_with_transcript()
+
+        if (outcome.is_new_final or outcome.refined_segments) and self._llm_client is not None:
             now = time.monotonic()
             if self._pending_since is None:
                 self._pending_since = now
             if self._record.pending_from_transcript_revision is None:
-                self._record.pending_from_transcript_revision = outcome.segment.transcript_revision
+                latest_rev = (
+                    max(s.transcript_revision for s in outcome.refined_segments)
+                    if outcome.refined_segments
+                    else (outcome.segment.transcript_revision if outcome.segment is not None else 0)
+                )
+                if latest_rev > 0:
+                    self._record.pending_from_transcript_revision = latest_rev
             if parsed.speech_final:
                 self._has_speech_final_trigger = True
             self._record.has_unapplied_transcript = True
@@ -549,30 +1106,69 @@ class _SoapSessionCoordinator:
             if self._record.active_generation != self._generation:
                 return False
 
-            processed = self._record.soap_manager.note.processed_transcript_revision
-            all_finals = self._record.transcript_state.finalized_segments
-            new_segments = [seg for seg in all_finals if seg.transcript_revision > processed]
-            if not new_segments:
+            error_attempts = 0
+            drift_retries = 0
+            max_drift_retries = 2
+            status_updating_emitted = False
+            last_exc: SoapLlmClientError | None = None
+            target_rev = 0
+
+            while True:
+                if self._record.active_generation != self._generation:
+                    return False
+
+                processed = self._record.soap_manager.note.processed_transcript_revision
+                all_finals = self._record.transcript_state.finalized_segments
+                new_segments = [seg for seg in all_finals if seg.transcript_revision > processed]
+                if not new_segments:
+                    self._pending_since = None
+                    self._has_speech_final_trigger = False
+                    if status_updating_emitted:
+                        self._record.pending_from_transcript_revision = None
+                        self.enqueue_soap_status(
+                            status="ready",
+                            has_unapplied_transcript=self._record.soap_manager.has_stale_plan_inference(),
+                        )
+                    return True
+
+                target_rev = max(seg.transcript_revision for seg in new_segments)
+                if (
+                    self._failed_extract_revision is not None
+                    and target_rev <= self._failed_extract_revision
+                ):
+                    if status_updating_emitted:
+                        self.enqueue_soap_status(
+                            status="error",
+                            has_unapplied_transcript=True,
+                            message="SOAP の更新に失敗しました。",
+                        )
+                    return False
+
+                # 話者不明 (unknown) だけの新規発話バッチでは LLM 抽出をスキップし、
+                # 手動話者訂正後に改めて抽出できるように既処理リビジョンだけ進める
+                if all(seg.speaker_role == "unknown" for seg in new_segments):
+                    self._record.soap_manager.mark_transcript_processed(target_rev)
+                    self._pending_since = None
+                    self._has_speech_final_trigger = False
+                    self._record.pending_from_transcript_revision = None
+                    self.enqueue_soap_status(
+                        status="ready",
+                        has_unapplied_transcript=self._record.soap_manager.has_stale_plan_inference(),
+                    )
+                    return True
+
+                snapshot_soap_revision = self._record.soap_manager.note.revision
+                snapshot_lookup = {(seg.stream_id, seg.segment_id): seg for seg in all_finals}
+                snapshot_sig = {key: seg.segment_revision for key, seg in snapshot_lookup.items()}
                 self._pending_since = None
                 self._has_speech_final_trigger = False
-                return True
+                if not status_updating_emitted:
+                    self._last_llm_start = time.monotonic()
+                    self.enqueue_soap_status(status="updating", has_unapplied_transcript=True)
+                    status_updating_emitted = True
 
-            target_rev = max(seg.transcript_revision for seg in new_segments)
-            if (
-                self._failed_extract_revision is not None
-                and target_rev <= self._failed_extract_revision
-            ):
-                return False
-            snapshot_lookup = {(seg.stream_id, seg.segment_id): seg for seg in all_finals}
-            self._pending_since = None
-            self._has_speech_final_trigger = False
-            self._last_llm_start = time.monotonic()
-            self.enqueue_soap_status(status="updating", has_unapplied_transcript=True)
-
-            last_exc: SoapLlmClientError | None = None
-            for attempt in range(retries + 1):
                 try:
-                    raw = await self._llm_client.extract_spoa(
+                    raw = await self._llm_client.extract_soap(
                         self._record.soap_manager.build_extract_payload(
                             new_segments=new_segments,
                             all_final_segments=list(snapshot_lookup.values()),
@@ -584,7 +1180,15 @@ class _SoapSessionCoordinator:
                         (seg.stream_id, seg.segment_id): seg
                         for seg in self._record.transcript_state.finalized_segments
                     }
-                    outcome = self._record.soap_manager.apply_extract_spoa_raw(
+                    if self._record.soap_manager.note.revision != snapshot_soap_revision:
+                        if drift_retries >= max_drift_retries:
+                            raise SoapLlmClientError(
+                                "会話の更新中のため再生成を保留しました。",
+                                code="LLM_INVALID_OUTPUT",
+                            )
+                        drift_retries += 1
+                        continue
+                    outcome = self._record.soap_manager.apply_extract_soap_raw(
                         raw_result=raw,
                         segments_lookup=current_lookup,
                         processed_transcript_revision=target_rev,
@@ -617,9 +1221,23 @@ class _SoapSessionCoordinator:
                     if not self.is_current():
                         return False
                     last_exc = exc
+                    # LLM 呼び出し中の話者補正や重複削除でリビジョンが進んだ場合は
+                    # 失敗扱いせず最新スナップショットで再試行する
+                    current_sig = {
+                        (seg.stream_id, seg.segment_id): seg.segment_revision
+                        for seg in self._record.transcript_state.finalized_segments
+                    }
+                    if (
+                        exc.code == "LLM_INVALID_OUTPUT"
+                        and current_sig != snapshot_sig
+                        and drift_retries < max_drift_retries
+                    ):
+                        drift_retries += 1
+                        continue
                     non_retryable = exc.code in {"LLM_INPUT_TOO_LARGE", "LLM_NOT_CONFIGURED"}
-                    if non_retryable or attempt >= retries or self._stopping:
+                    if non_retryable or error_attempts >= retries or self._stopping:
                         break
+                    error_attempts += 1
 
             self._failed_extract_revision = target_rev
             message = str(last_exc) if last_exc is not None else "SOAP の更新に失敗しました。"
@@ -709,6 +1327,8 @@ async def relay_soap_conversation_stream(
     now_fn: Callable[[], float] | None = None,
     mono_mix: bool | None = None,
     audio_gate: AudioActivityGate | None = None,
+    speaker_client: SpeakerEmbeddingClientProtocol | None = None,
+    use_default_speaker_client: bool = True,
 ) -> None:
     """会話状態・単一 writer・Deepgram 中継・非同期 SOAP 生成を統合して実行する。"""
     resolved_timing = timing or SoapTimingOptions.from_settings()
@@ -741,6 +1361,15 @@ async def relay_soap_conversation_stream(
         if llm_client is not None
         else (get_default_soap_llm_client() if (use_default_llm and config.channels == 2) else None)
     )
+    effective_speaker_client = (
+        speaker_client
+        if speaker_client is not None
+        else (
+            get_default_speaker_embedding_client(require_available=False)
+            if (use_default_speaker_client and config.channels == 2 and not resolved_mono_mix)
+            else None
+        )
+    )
 
     record = resolved_registry.get_or_create(
         user_id=user_id,
@@ -763,6 +1392,7 @@ async def relay_soap_conversation_stream(
         timing=resolved_timing,
         audio_gate=active_gate,
         mono_mix=resolved_mono_mix,
+        speaker_client=effective_speaker_client,
     )
 
     async def _send_error_and_close(
@@ -817,6 +1447,15 @@ async def relay_soap_conversation_stream(
                 msg_type = control.get("type")
                 if msg_type == "Auth":
                     continue
+                if msg_type == "SpeakerProfile":
+                    coordinator.handle_speaker_profile_message(control)
+                    continue
+                if msg_type == "UpdateSegmentSpeaker":
+                    coordinator.handle_segment_speaker_override(control)
+                    continue
+                if msg_type == "SetSegmentEnabled":
+                    coordinator.handle_segment_enabled(control)
+                    continue
                 if msg_type == "CloseStream":
                     await deepgram_ws.send(payload)
                     return True
@@ -833,7 +1472,7 @@ async def relay_soap_conversation_stream(
             text = (
                 message.decode("utf-8", errors="ignore") if isinstance(message, bytes) else message
             )
-            coordinator.handle_deepgram_message(text)
+            await coordinator.handle_deepgram_message_async(text)
 
     writer_task = asyncio.create_task(queue.drain_to(client_ws.send_text))
     llm_task = asyncio.create_task(coordinator.llm_worker_loop())
@@ -972,6 +1611,7 @@ async def relay_soap_conversation_stream(
     finally:
         coordinator.request_stop_background_llm()
         queue.close()
+        record.transcript_state.clear_pcm_buffer()
         for task in (
             client_task,
             deepgram_task,

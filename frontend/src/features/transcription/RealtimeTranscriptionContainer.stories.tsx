@@ -1,7 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { useState } from "react";
-import type { SoapPanelSectionView } from "@/shared/components/soap-panel/SoapPanel";
-import type { TranscriptChatSegment } from "@/shared/components/transcript-chat/TranscriptChat";
+import type {
+  SoapPanelSectionView,
+  TranscriptChatSegment,
+  TranscriptSpeakerId,
+} from "@/shared/components";
 import {
   TranscriptionWorkspaceView,
   type TranscriptionWorkspaceViewProps,
@@ -13,6 +16,7 @@ const SAMPLE_SEGMENTS: readonly TranscriptChatSegment[] = [
     segmentId: "seg-1",
     channelIndex: 0,
     align: "right",
+    speakerId: "pharmacist",
     roleName: "薬剤師",
     timeLabel: "00:01.2",
     text: "こんにちは。本日はどのようなお薬でお困りですか？",
@@ -24,6 +28,7 @@ const SAMPLE_SEGMENTS: readonly TranscriptChatSegment[] = [
     segmentId: "seg-2",
     channelIndex: 1,
     align: "left",
+    speakerId: "patient",
     roleName: "患者",
     timeLabel: "00:04.8",
     text: "昨日から喉が痛くて、今朝の体温が37.8℃ありました。長いカタカナ用語やURL風文字列 https://example.com/very-long-medication-guidance-path-without-spaces も折り返されます。",
@@ -35,6 +40,7 @@ const SAMPLE_SEGMENTS: readonly TranscriptChatSegment[] = [
     segmentId: "seg-3",
     channelIndex: 0,
     align: "right",
+    speakerId: "pharmacist",
     roleName: "薬剤師",
     timeLabel: "00:10.5",
     text: "毎食後に1錠ずつ服用して、3日以上熱が続く場合は受診してください。",
@@ -131,10 +137,17 @@ const SAMPLE_SECTIONS: readonly SoapPanelSectionView[] = [
   },
 ];
 
+const SPEAKER_LABELS: Record<TranscriptSpeakerId, string> = {
+  pharmacist: "薬剤師",
+  patient: "患者",
+  unknown: "話者不明",
+};
+
 function InteractiveWorkspaceHarness(props: Partial<TranscriptionWorkspaceViewProps>) {
   const [mobilePane, setMobilePane] = useState<"transcript" | "soap">("transcript");
   const [highlightedSegmentKey, setHighlightedSegmentKey] = useState<string | null>(null);
   const [copiedSoap, setCopiedSoap] = useState(false);
+  const [segments, setSegments] = useState<readonly TranscriptChatSegment[]>(SAMPLE_SEGMENTS);
 
   return (
     <TranscriptionWorkspaceView
@@ -190,11 +203,41 @@ function InteractiveWorkspaceHarness(props: Partial<TranscriptionWorkspaceViewPr
       }}
       transcriptChat={{
         title: "文字起こし",
-        countLabel: `${SAMPLE_SEGMENTS.length} 件`,
-        segments: SAMPLE_SEGMENTS,
+        countLabel: `${segments.length} 件`,
+        segments,
         emptyMessage: "会話が表示されます。",
         scrollToBottomLabel: "↓ 新しい発話",
         highlightedSegmentKey,
+        speakerOptions: [
+          { value: "pharmacist", label: "薬剤師" },
+          { value: "patient", label: "患者" },
+        ],
+        getSpeakerSelectLabel: ({ timeLabel }) => `${timeLabel} の話者を変更`,
+        onChangeSegmentSpeaker: (streamId, segmentId, speakerId) => {
+          setSegments((prev) =>
+            prev.map((seg) =>
+              seg.streamId === streamId && seg.segmentId === segmentId
+                ? {
+                    ...seg,
+                    speakerId,
+                    roleName: SPEAKER_LABELS[speakerId],
+                    align: speakerId === "pharmacist" ? "right" : "left",
+                  }
+                : seg,
+            ),
+          );
+        },
+        getSegmentToggleLabel: ({ timeLabel, text, disabled }) =>
+          `${timeLabel} の発話「${text}」を${disabled ? "有効に戻す" : "無効化"}`,
+        onSetSegmentEnabled: (streamId, segmentId, enabled) => {
+          setSegments((prev) =>
+            prev.map((seg) =>
+              seg.streamId === streamId && seg.segmentId === segmentId
+                ? { ...seg, disabled: !enabled }
+                : seg,
+            ),
+          );
+        },
         ...props.transcriptChat,
       }}
       soapPanel={{

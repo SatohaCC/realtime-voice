@@ -101,13 +101,13 @@ class _CountingLlmClient(FakeSoapLlmClient):
         self._delay_seconds = delay_seconds
         self._fail_extract = fail_extract
 
-    async def extract_spoa(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.extract_calls += 1
         if self._delay_seconds > 0:
             await asyncio.sleep(self._delay_seconds)
         if self._fail_extract:
             raise SoapLlmClientError("LLM unavailable", code="LLM_UNAVAILABLE")
-        return await super().extract_spoa(payload)
+        return await super().extract_soap(payload)
 
     async def finalize_a_from_p(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.finalize_calls += 1
@@ -122,6 +122,7 @@ def _dg_result(
     speech_final: bool,
     start: float,
     duration: float = 1.0,
+    confidence: float = 0.95,
 ) -> str:
     return json.dumps(
         {
@@ -131,7 +132,7 @@ def _dg_result(
             "duration": duration,
             "is_final": is_final,
             "speech_final": speech_final,
-            "channel": {"alternatives": [{"transcript": text, "confidence": 0.95}]},
+            "channel": {"alternatives": [{"transcript": text, "confidence": confidence}]},
         },
         ensure_ascii=False,
     )
@@ -175,6 +176,79 @@ def _plan_message(start: float = 0) -> str:
     )
 
 
+def test_short_voiceprint_pool_uses_selected_audio_and_emits_refinement() -> None:
+    import struct
+
+    vector = [1.0] + [0.0] * 31
+
+    class SpeakerClient:
+        model_id = "3dspeaker_campplus_zh_en_16k_contiguous_v2"
+        embedding_dim = 32
+        received: list[int] = []
+
+        def extract_embedding_from_pcm16(
+            self,
+            pcm16_bytes: bytes,
+            *,
+            sample_rate: int = 16000,
+            channels: int = 1,
+            channel_index: int = 0,
+        ) -> list[float]:
+            assert (sample_rate, channels, channel_index) == (16000, 1, 0)
+            assert set(struct.unpack(f"<{len(pcm16_bytes) // 2}h", pcm16_bytes)) <= {0, 4000}
+            self.received.append(len(pcm16_bytes))
+            return vector
+
+    async def run() -> None:
+        record, coordinator = _coordinator(FakeSoapLlmClient())
+        speaker = SpeakerClient()
+        coordinator._speaker_client = speaker
+        state = record.transcript_state
+        assert state.set_pharmacist_profile(model_id=speaker.model_id, embedding=vector)[0]
+        # 2つの短発話の間には50msの無音がある。別chの音は混ぜない。
+        for amplitude, duration in [(4000, 0.35), (0, 0.05), (4000, 0.35)]:
+            state.append_pcm16(
+                struct.pack("<hh", amplitude, 100) * round(16000 * duration),
+                channels=2,
+                sample_rate=16000,
+            )
+        await coordinator.handle_deepgram_message_async(
+            _dg_result(
+                channel=0,
+                text="はい",
+                is_final=True,
+                speech_final=True,
+                start=0,
+                duration=0.35,
+            )
+        )
+        assert state.finalized_segments[0].speaker_role == "patient"
+        assert speaker.received == []
+        await coordinator.handle_deepgram_message_async(
+            _dg_result(
+                channel=0,
+                text="そうです",
+                is_final=True,
+                speech_final=True,
+                start=0.4,
+                duration=0.35,
+            )
+        )
+        assert len(speaker.received) == 1
+        assert speaker.received[0] / 32000 == pytest.approx(0.75)
+        assert [s.speaker_role for s in state.finalized_segments] == ["pharmacist", "pharmacist"]
+        assert state.finalized_segments[0].status == "refined"
+        emitted = [json.loads(payload) for _, payload in coordinator._queue._items]
+        assert any(
+            event.get("type") == "TranscriptUpdated"
+            and event["segment"]["status"] == "refined"
+            and event["segment"]["speaker_role"] == "pharmacist"
+            for event in emitted
+        )
+
+    asyncio.run(run())
+
+
 def test_precision_defaults_disable_mixing_and_audio_cutting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -193,7 +267,7 @@ def test_affirmative_reply_reaches_llm_with_processed_question_context() -> None
             super().__init__()
             self.payloads: list[dict[str, Any]] = []
 
-        async def extract_spoa(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
             self.payloads.append(payload)
             return {"operations": []}
 
@@ -352,7 +426,7 @@ def test_failed_batch_waits_for_new_input_instead_of_restarting_retries(
         class Failing(FakeSoapLlmClient):
             calls = 0
 
-            async def extract_spoa(self, payload: dict[str, Any]) -> dict[str, Any]:
+            async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
                 self.calls += 1
                 raise SoapLlmClientError("生成失敗", code=code)
 
@@ -867,3 +941,851 @@ def test_short_replies_and_greetings_are_sent_to_llm() -> None:
         assert llm2.extract_calls == 1
 
     asyncio.run(_run())
+
+
+def test_ws_speaker_profile_not_forwarded_to_deepgram_and_verifies_bleed() -> None:
+    import array
+
+    from app.services.speaker_service import normalize_embedding
+
+    pharm_vec = normalize_embedding([1.0] + [0.0] * 31)
+    assert pharm_vec is not None
+
+    class _StubSpeakerClient:
+        model_id = "3dspeaker_campplus_zh_en_16k_contiguous_v2"
+        embedding_dim = 32
+
+        def __init__(self, vec: list[float]) -> None:
+            self.calls = 0
+            self._vec = vec
+
+        def extract_embedding_from_pcm16(
+            self,
+            pcm16_bytes: bytes,
+            *,
+            sample_rate: int = 16000,
+            channels: int = 1,
+            channel_index: int = 0,
+        ) -> list[float] | None:
+            self.calls += 1
+            return list(self._vec)
+
+    buf = array.array("h")
+    for _ in range(32000):  # 2秒・2ch
+        buf.append(4000)
+        buf.append(1500)
+    stereo_pcm = buf.tobytes()
+
+    async def _run() -> None:
+        ws = _StubClientWs(
+            [
+                json.dumps({"type": "Auth", "access_token": "valid-token"}),
+                json.dumps(
+                    {
+                        "type": "SpeakerProfile",
+                        "model_id": "3dspeaker_campplus_zh_en_16k_contiguous_v2",
+                        "embedding": pharm_vec,
+                    }
+                ),
+                stereo_pcm,
+                json.dumps({"type": "CloseStream"}),
+            ]
+        )
+        # 薬剤師の声が ch1（患者マイク側）に混入した場合を模擬
+        dg = _StubDeepgramClient(
+            [
+                _dg_result(
+                    channel=1,
+                    text="朝食後に1錠お飲みください",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.1,
+                    duration=1.5,
+                )
+            ]
+        )
+        llm = _CountingLlmClient()
+        spk = _StubSpeakerClient(pharm_vec)
+        registry = ConversationSessionRegistry()
+
+        await relay_deepgram_stream(
+            ws,
+            TranscriptionStreamConfig(channels=2, enable_soap=True, conversation_id="conv-spk-ws"),
+            client=dg,
+            auth_client=_StubAuthClient(),
+            llm_client=llm,
+            speaker_client=spk,
+            conversation_registry=registry,
+            soap_timing=_fast_timing(),
+            now_fn=lambda: 1_000_000.0,
+        )
+
+        # SpeakerProfile は Deepgram へ転送しない
+        assert not any(
+            isinstance(p, str) and "SpeakerProfile" in p for p in dg._stream.sent_payloads
+        )
+        events = ws.parsed_events()
+        acks = [ev for ev in events if ev.get("type") == "SpeakerProfileAck"]
+        assert len(acks) == 1
+        assert acks[0]["accepted"] is True
+
+        assert spk.calls >= 1
+        finals = [
+            ev
+            for ev in events
+            if ev.get("type") == "TranscriptUpdated" and ev["segment"]["status"] == "final"
+        ]
+        assert len(finals) == 1
+        # ch1 由来でも薬剤師声紋と一致したため pharmacist へ補正される
+        assert finals[0]["segment"]["speaker_role"] == "pharmacist"
+
+    asyncio.run(_run())
+
+
+def test_ws_replaces_inferior_other_channel_duplicate_with_removed_event() -> None:
+    import array
+
+    from app.services.speaker_service import normalize_embedding
+
+    pharm_vec = normalize_embedding([1.0] + [0.0] * 31)
+    assert pharm_vec is not None
+
+    class _StubSpeakerClient:
+        model_id = "3dspeaker_campplus_zh_en_16k_contiguous_v2"
+        embedding_dim = 32
+
+        def __init__(self, vec: list[float]) -> None:
+            self._vec = list(vec)
+
+        def extract_embedding_from_pcm16(
+            self,
+            pcm16_bytes: bytes,
+            *,
+            sample_rate: int = 16000,
+            channels: int = 1,
+            channel_index: int = 0,
+        ) -> list[float] | None:
+            return list(self._vec)
+
+    buf = array.array("h")
+    for _ in range(48000):  # 3秒・2ch・近接マイク模擬
+        buf.append(4200)
+        buf.append(3900)
+    stereo_pcm = buf.tobytes()
+
+    async def _run() -> None:
+        ws = _StubClientWs(
+            [
+                json.dumps({"type": "Auth", "access_token": "valid-token"}),
+                json.dumps(
+                    {
+                        "type": "SpeakerProfile",
+                        "model_id": "3dspeaker_campplus_zh_en_16k_contiguous_v2",
+                        "embedding": pharm_vec,
+                    }
+                ),
+                stereo_pcm,
+                json.dumps({"type": "CloseStream"}),
+            ]
+        )
+        # ch1 誤認識「シャブンに」が先に届き、直後に ch0「処分に」が届く
+        dg = _StubDeepgramClient(
+            [
+                _dg_result(
+                    channel=1,
+                    text="シャブンに",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.2,
+                    duration=1.1,
+                    confidence=0.72,
+                ),
+                _dg_result(
+                    channel=0,
+                    text="処分に",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.2,
+                    duration=1.1,
+                    confidence=0.95,
+                ),
+            ]
+        )
+        llm = _CountingLlmClient()
+        spk = _StubSpeakerClient(pharm_vec)
+        registry = ConversationSessionRegistry()
+
+        await relay_deepgram_stream(
+            ws,
+            TranscriptionStreamConfig(channels=2, enable_soap=True, conversation_id="conv-ws-dup"),
+            client=dg,
+            auth_client=_StubAuthClient(),
+            llm_client=llm,
+            speaker_client=spk,
+            conversation_registry=registry,
+            soap_timing=_fast_timing(),
+            now_fn=lambda: 1_000_000.0,
+        )
+
+        events = ws.parsed_events()
+        transcript_events = [ev for ev in events if ev.get("type") == "TranscriptUpdated"]
+        removed = [ev for ev in transcript_events if ev.get("removed") is True]
+        assert len(removed) == 1
+        assert removed[0]["segment"]["text"] == "シャブンに"
+
+        kept = [
+            ev["segment"]["text"]
+            for ev in transcript_events
+            if not ev.get("removed") and ev["segment"]["text"] != "シャブンに"
+        ]
+        assert kept == ["処分に"]
+
+        record = registry.get_or_create(
+            user_id="user-1",
+            conversation_id="conv-ws-dup",
+        )
+        assert [seg.text for seg in record.transcript_state.finalized_segments] == ["処分に"]
+
+    asyncio.run(_run())
+
+
+def test_ws_splits_turn_switch_with_words_and_supports_manual_override() -> None:
+    import array
+
+    from app.services.speaker_service import normalize_embedding
+
+    pharm_vec = normalize_embedding([1.0] + [0.0] * 31)
+    patient_vec = normalize_embedding([0.0, 1.0] + [0.0] * 30)
+    assert pharm_vec is not None
+    assert patient_vec is not None
+
+    class _AmpRoutingSpeakerClient:
+        model_id = "3dspeaker_campplus_zh_en_16k_contiguous_v2"
+        embedding_dim = 32
+
+        def extract_embedding_from_pcm16(
+            self,
+            pcm16_bytes: bytes,
+            *,
+            sample_rate: int = 16000,
+            channels: int = 1,
+            channel_index: int = 0,
+        ) -> list[float] | None:
+            samples = array.array("h")
+            samples.frombytes(pcm16_bytes[: len(pcm16_bytes) - (len(pcm16_bytes) % 2)])
+            if not samples:
+                return None
+            avg_abs = sum(abs(s) for s in samples) / len(samples)
+            # ch0=4200 または ch0=5000 は薬剤師、それ以外（患者優位等）は患者ベクトル
+            assert pharm_vec is not None
+            assert patient_vec is not None
+            return list(pharm_vec if avg_abs >= 3800 else patient_vec)
+
+    # [0..2.0s]: ch1 患者が話す（患者一時重心を登録）
+    # [2.0..3.5s]: ch0 薬剤師 (amp=4500)
+    # [3.5..5.5s]: ch0 に混ざる ch1 患者 (amp=2800 / 2800)
+    # 実ストリーム同様に区間別フレームとして送信し、時刻別の RMS 履歴を保持させる
+    pcm_part_0 = array.array("h", [400, 3000] * 32000).tobytes()
+    pcm_part_1 = array.array("h", [4500, 600] * 24000).tobytes()
+    pcm_part_2 = array.array("h", [2800, 2800] * 32000).tobytes()
+
+    mixed_words_payload = json.dumps(
+        {
+            "type": "Results",
+            "channel_index": [0, 2],
+            "start": 2.1,
+            "duration": 3.2,
+            "is_final": True,
+            "speech_final": True,
+            "channel": {
+                "alternatives": [
+                    {
+                        "transcript": "今日は体調どうですか。昨日から少し熱があります。",
+                        "confidence": 0.94,
+                        "words": [
+                            {
+                                "punctuated_word": "今日は",
+                                "start": 2.1,
+                                "end": 2.5,
+                                "confidence": 0.95,
+                            },
+                            {
+                                "punctuated_word": "体調",
+                                "start": 2.5,
+                                "end": 2.9,
+                                "confidence": 0.95,
+                            },
+                            {
+                                "punctuated_word": "どうですか。",
+                                "start": 2.9,
+                                "end": 3.4,
+                                "confidence": 0.95,
+                            },
+                            {
+                                "punctuated_word": "昨日から",
+                                "start": 3.9,
+                                "end": 4.4,
+                                "confidence": 0.93,
+                            },
+                            {
+                                "punctuated_word": "少し",
+                                "start": 4.4,
+                                "end": 4.7,
+                                "confidence": 0.93,
+                            },
+                            {
+                                "punctuated_word": "熱があります。",
+                                "start": 4.7,
+                                "end": 5.3,
+                                "confidence": 0.93,
+                            },
+                        ],
+                    }
+                ]
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    async def _run() -> None:
+        ws = _StubClientWs(
+            [
+                json.dumps({"type": "Auth", "access_token": "valid-token"}),
+                json.dumps(
+                    {
+                        "type": "SpeakerProfile",
+                        "model_id": "3dspeaker_campplus_zh_en_16k_contiguous_v2",
+                        "embedding": pharm_vec,
+                    }
+                ),
+                pcm_part_0,
+                pcm_part_1,
+                pcm_part_2,
+                json.dumps({"type": "CloseStream"}),
+            ]
+        )
+        dg = _StubDeepgramClient(
+            [
+                _dg_result(
+                    channel=1,
+                    text="よろしくお願いします。",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.1,
+                    duration=1.6,
+                ),
+                mixed_words_payload,
+            ]
+        )
+        llm = _CountingLlmClient()
+        spk = _AmpRoutingSpeakerClient()
+        registry = ConversationSessionRegistry()
+
+        await relay_deepgram_stream(
+            ws,
+            TranscriptionStreamConfig(channels=2, enable_soap=True, conversation_id="conv-split"),
+            client=dg,
+            auth_client=_StubAuthClient(),
+            llm_client=llm,
+            speaker_client=spk,
+            conversation_registry=registry,
+            soap_timing=_fast_timing(),
+            now_fn=lambda: 1_000_000.0,
+        )
+
+        record = registry.get_or_create(user_id="user-1", conversation_id="conv-split")
+        finals = record.transcript_state.finalized_segments
+        assert [(s.speaker_role, s.text) for s in finals] == [
+            ("patient", "よろしくお願いします。"),
+            ("pharmacist", "今日は体調どうですか。"),
+            ("patient", "昨日から少し熱があります。"),
+        ]
+
+    asyncio.run(_run())
+
+
+def test_ws_manual_speaker_override_updates_segment_and_reconciles_soap() -> None:
+    async def _run() -> None:
+        ws = _StubClientWs(
+            [
+                json.dumps({"type": "Auth", "access_token": "valid-token"}),
+            ]
+        )
+        dg = _StubDeepgramClient(
+            [
+                _dg_result(
+                    channel=0,
+                    text="毎食後に1錠飲んでください",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.2,
+                    duration=1.2,
+                )
+            ]
+        )
+        llm = _CountingLlmClient()
+        registry = ConversationSessionRegistry()
+
+        task = asyncio.create_task(
+            relay_deepgram_stream(
+                ws,
+                TranscriptionStreamConfig(
+                    channels=2, enable_soap=True, conversation_id="conv-override"
+                ),
+                client=dg,
+                auth_client=_StubAuthClient(),
+                llm_client=llm,
+                conversation_registry=registry,
+                soap_timing=_fast_timing(),
+            )
+        )
+
+        # 初回 SOAP 生成（P に反映）まで待機してから、話者を unknown へ手動訂正する
+        for _ in range(80):
+            events = ws.parsed_events()
+            if any(
+                ev.get("type") == "SoapUpdated" and ev["soap"]["sections"]["P"]["items"]
+                for ev in events
+            ):
+                break
+            await asyncio.sleep(0.02)
+
+        record = registry.get_or_create(user_id="user-1", conversation_id="conv-override")
+        seg = record.transcript_state.finalized_segments[0]
+        await ws._incoming.put(
+            json.dumps(
+                {
+                    "type": "UpdateSegmentSpeaker",
+                    "stream_id": seg.stream_id,
+                    "segment_id": seg.segment_id,
+                    "speaker_role": "unknown",
+                }
+            )
+        )
+        for _ in range(80):
+            events = ws.parsed_events()
+            if any(
+                ev.get("type") == "SoapUpdated" and ev.get("retracted_item_ids") for ev in events
+            ):
+                break
+            await asyncio.sleep(0.02)
+
+        await ws._incoming.put(json.dumps({"type": "CloseStream"}))
+        await task
+
+        events = ws.parsed_events()
+        refined_transcript = [
+            ev
+            for ev in events
+            if ev.get("type") == "TranscriptUpdated"
+            and ev["segment"]["segment_id"] == seg.segment_id
+            and ev["segment"]["status"] == "refined"
+        ]
+        assert refined_transcript
+        assert refined_transcript[-1]["segment"]["speaker_role"] == "patient"
+
+        soap_updates = [ev for ev in events if ev.get("type") == "SoapUpdated"]
+        assert any(ev.get("retracted_item_ids") for ev in soap_updates)
+        assert soap_updates[-1]["soap"]["sections"]["P"]["items"] == []
+
+    asyncio.run(_run())
+
+
+def test_ws_delete_segment_removes_utterance_and_reconciles_soap() -> None:
+    async def _run() -> None:
+        ws = _StubClientWs(
+            [
+                json.dumps({"type": "Auth", "access_token": "valid-token"}),
+            ]
+        )
+        dg = _StubDeepgramClient(
+            [
+                _dg_result(
+                    channel=0,
+                    text="毎食後に1錠飲んでください",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.2,
+                    duration=1.2,
+                )
+            ]
+        )
+        llm = _CountingLlmClient()
+        registry = ConversationSessionRegistry()
+
+        task = asyncio.create_task(
+            relay_deepgram_stream(
+                ws,
+                TranscriptionStreamConfig(
+                    channels=2, enable_soap=True, conversation_id="conv-delete-ws"
+                ),
+                client=dg,
+                auth_client=_StubAuthClient(),
+                llm_client=llm,
+                conversation_registry=registry,
+                soap_timing=_fast_timing(),
+            )
+        )
+
+        for _ in range(80):
+            events = ws.parsed_events()
+            if any(
+                ev.get("type") == "SoapUpdated" and ev["soap"]["sections"]["P"]["items"]
+                for ev in events
+            ):
+                break
+            await asyncio.sleep(0.02)
+
+        record = registry.get_or_create(user_id="user-1", conversation_id="conv-delete-ws")
+        seg = record.transcript_state.finalized_segments[0]
+        await ws._incoming.put(
+            json.dumps(
+                {
+                    "type": "SetSegmentEnabled",
+                    "enabled": False,
+                    "stream_id": seg.stream_id,
+                    "segment_id": seg.segment_id,
+                }
+            )
+        )
+        for _ in range(80):
+            events = ws.parsed_events()
+            if any(
+                ev.get("type") == "SoapUpdated" and ev.get("retracted_item_ids") for ev in events
+            ):
+                break
+            await asyncio.sleep(0.02)
+
+        await ws._incoming.put(json.dumps({"type": "CloseStream"}))
+        await task
+
+        events = ws.parsed_events()
+        removed_events = [
+            ev
+            for ev in events
+            if ev.get("type") == "TranscriptUpdated"
+            and ev["segment"].get("disabled") is True
+            and ev["segment"]["segment_id"] == seg.segment_id
+        ]
+        assert len(removed_events) == 1
+        assert record.transcript_state.finalized_segments == []
+
+        soap_updates = [ev for ev in events if ev.get("type") == "SoapUpdated"]
+        assert any(ev.get("retracted_item_ids") for ev in soap_updates)
+        assert soap_updates[-1]["soap"]["sections"]["P"]["items"] == []
+
+    asyncio.run(_run())
+
+
+def test_rest_delete_conversation_segment_reconciles_soap_after_stop() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.routers.dependencies import get_current_user
+    from app.schemas.auth import AuthenticatedUser
+    from app.services.conversation_service import DeepgramTranscriptInput
+    from app.services.soap_stream_service import get_default_conversation_registry
+
+    registry = get_default_conversation_registry()
+    record = registry.get_or_create(user_id="user-rest-del", conversation_id="conv-rest-del")
+    stream_id = record.transcript_state.start_stream("s-rest")
+    res = record.transcript_state.apply_deepgram_event(
+        DeepgramTranscriptInput(0, "毎食後に服用してください", True, True, 0.1, 1.0, 0.95),
+    )
+    assert res.segment is not None
+    record.soap_manager.apply_extract_soap_raw(
+        raw_result={
+            "operations": [
+                {
+                    "section": "P",
+                    "action": "add",
+                    "text": "毎食後に服用指導。",
+                    "evidence_refs": [
+                        {
+                            "stream_id": stream_id,
+                            "segment_id": res.segment.segment_id,
+                            "segment_revision": res.segment.segment_revision,
+                            "quote": "毎食後に服用してください",
+                            "speaker_role": "pharmacist",
+                        }
+                    ],
+                }
+            ]
+        },
+        segments_lookup={(stream_id, res.segment.segment_id): res.segment},
+        processed_transcript_revision=record.transcript_state.transcript_revision,
+    )
+
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+        user_id="user-rest-del",
+        email="pharm@example.com",
+        role="authenticated",
+        expires_at=9999999999,
+    )
+    try:
+        client = TestClient(app)
+        resp = client.patch(
+            "/api/transcriptions/conversations/conv-rest-del/segments",
+            json={
+                "type": "SetSegmentEnabled",
+                "stream_id": stream_id,
+                "segment_id": res.segment.segment_id,
+                "enabled": False,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["conversation_id"] == "conv-rest-del"
+        assert body["segment"]["segment_id"] == res.segment.segment_id
+        assert body["segment"]["disabled"] is True
+        assert record.transcript_state.segments[0].text == res.segment.text
+        assert body["soap"]["sections"]["P"]["items"] == []
+
+        resp_missing = client.patch(
+            "/api/transcriptions/conversations/conv-rest-del/segments",
+            json={
+                "type": "SetSegmentEnabled",
+                "stream_id": stream_id,
+                "segment_id": "missing",
+                "enabled": False,
+            },
+        )
+        assert resp_missing.status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.parametrize("fail_rebuild", [False, True])
+def test_speaker_correction_rebuilds_all_summary_sources_and_never_keeps_stale_text(
+    fail_rebuild: bool,
+) -> None:
+    from app.services.conversation_service import DeepgramTranscriptInput
+
+    class RebuildLlm(FakeSoapLlmClient):
+        async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
+            if fail_rebuild:
+                raise SoapLlmClientError("再生成失敗", code="LLM_INVALID_OUTPUT")
+            return await super().extract_soap(payload)
+
+    async def run() -> None:
+        registry = ConversationSessionRegistry()
+        record = registry.get_or_create(user_id="u", conversation_id="correction-summary")
+        stream = record.transcript_state.start_stream("s1")
+        for start, text in enumerate(("頭が痛いです", "吐き気があります")):
+            record.transcript_state.apply_deepgram_event(
+                DeepgramTranscriptInput(1, text, True, True, start * 2, start * 2 + 1, 0.9)
+            )
+        first, second = record.transcript_state.finalized_segments
+        lookup = {(s.stream_id, s.segment_id): s for s in (first, second)}
+        record.soap_manager.apply_extract_soap_raw(
+            raw_result={
+                "operations": [
+                    {
+                        "section": "S",
+                        "action": "add",
+                        "text": "頭痛と吐き気。",
+                        "evidence_refs": [
+                            {
+                                "stream_id": s.stream_id,
+                                "segment_id": s.segment_id,
+                                "segment_revision": s.segment_revision,
+                                "quote": s.text,
+                            }
+                            for s in (first, second)
+                        ],
+                    }
+                ]
+            },
+            segments_lookup=lookup,
+            processed_transcript_revision=record.transcript_state.transcript_revision,
+        )
+        coordinator = _SoapSessionCoordinator(
+            record=record,
+            stream_id=stream,
+            generation=record.active_generation,
+            queue=BoundedWsOutboundQueue(maxsize=64),
+            llm_client=RebuildLlm(),
+            timing=_fast_timing(),
+        )
+        coordinator.handle_segment_speaker_override(
+            {
+                "type": "UpdateSegmentSpeaker",
+                "stream_id": stream,
+                "segment_id": second.segment_id,
+                "speaker_role": "pharmacist",
+            }
+        )
+        assert record.soap_manager.note.sections.S.items == []
+        ok = await coordinator._run_extract_step(retries=0)
+        assert ok is not fail_rebuild
+        if fail_rebuild:
+            assert record.soap_manager.note.sections.S.items == []
+            assert record.soap_status == "error"
+        else:
+            assert record.soap_manager.note.sections.S.items[0].text == first.text
+            assert all(
+                second.segment_id != ev.segment_id
+                for item in record.soap_manager.note.sections.S.items
+                for ev in item.evidence
+            )
+
+    asyncio.run(run())
+
+
+def test_concurrent_speaker_override_during_extract_retries_with_fresh_snapshot() -> None:
+    from app.services.conversation_service import DeepgramTranscriptInput
+
+    class _ConcurrentMutationLlmClient(FakeSoapLlmClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.extract_calls = 0
+            self.coordinator: _SoapSessionCoordinator | None = None
+            self.target_stream_id = ""
+            self.target_segment_id = ""
+
+        async def extract_soap(self, payload: dict[str, Any]) -> dict[str, Any]:
+            self.extract_calls += 1
+            if self.extract_calls == 1 and self.coordinator is not None:
+                # 1回目の LLM 呼び出し中にクライアントから話者手動訂正が入った状況を再現する
+                self.coordinator.handle_segment_speaker_override(
+                    {
+                        "type": "UpdateSegmentSpeaker",
+                        "stream_id": self.target_stream_id,
+                        "segment_id": self.target_segment_id,
+                        "speaker_role": "patient",
+                    }
+                )
+                return {
+                    "operations": [
+                        {
+                            "section": "S",
+                            "action": "add",
+                            "text": "昨日から頭痛が続いている。",
+                            "evidence_refs": [
+                                {
+                                    "stream_id": self.target_stream_id,
+                                    "segment_id": self.target_segment_id,
+                                    "segment_revision": 1,
+                                    "quote": "昨日から頭が痛いです",
+                                    "speaker_role": "patient",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            return await super().extract_soap(payload)
+
+    async def _run() -> None:
+        registry = ConversationSessionRegistry()
+        record = registry.get_or_create(user_id="user-race", conversation_id="conv-race")
+        stream_id = record.transcript_state.start_stream("s-race")
+        queue = BoundedWsOutboundQueue(maxsize=64)
+        llm = _ConcurrentMutationLlmClient()
+        coordinator = _SoapSessionCoordinator(
+            record=record,
+            stream_id=stream_id,
+            generation=record.active_generation,
+            queue=queue,
+            llm_client=llm,
+            timing=_fast_timing(),
+        )
+        # 初期誤判定 (channel 0 = pharmacist) を抽出中に手動で patient へ補正する
+        res = record.transcript_state.apply_deepgram_event(
+            DeepgramTranscriptInput(0, "昨日から頭が痛いです", True, True, 0.2, 1.0, 0.95),
+        )
+        assert res.segment is not None
+        llm.coordinator = coordinator
+        llm.target_stream_id = stream_id
+        llm.target_segment_id = res.segment.segment_id
+
+        ok = await coordinator._run_extract_step(retries=0)
+        assert ok is True
+        assert llm.extract_calls == 2
+        assert coordinator._failed_extract_revision is None
+        assert record.soap_status == "ready"
+        assert len(record.soap_manager.note.sections.S.items) == 1
+
+    asyncio.run(_run())
+
+
+def test_unknown_only_batch_skips_llm_until_speaker_assigned() -> None:
+    from app.services.conversation_service import DeepgramTranscriptInput
+
+    async def _run() -> None:
+        registry = ConversationSessionRegistry()
+        record = registry.get_or_create(user_id="user-unk", conversation_id="conv-unk-skip")
+        stream_id = record.transcript_state.start_stream("s-unk")
+        queue = BoundedWsOutboundQueue(maxsize=64)
+        llm = _CountingLlmClient()
+        coordinator = _SoapSessionCoordinator(
+            record=record,
+            stream_id=stream_id,
+            generation=record.active_generation,
+            queue=queue,
+            llm_client=llm,
+            timing=_fast_timing(),
+        )
+        res = record.transcript_state.apply_deepgram_event(
+            DeepgramTranscriptInput(1, "昨日から頭が痛いです", True, True, 0.2, 1.0, 0.95),
+        )
+        assert res.segment is not None
+        record.transcript_state.override_segment_speaker(
+            stream_id=stream_id,
+            segment_id=res.segment.segment_id,
+            speaker_role="unknown",
+        )
+
+        ok_unknown = await coordinator._run_extract_step(retries=0)
+        assert ok_unknown is True
+        assert llm.extract_calls == 1
+        assert (
+            record.soap_manager.note.processed_transcript_revision
+            == record.transcript_state.transcript_revision
+        )
+        assert record.soap_status == "ready"
+
+        coordinator.handle_segment_speaker_override(
+            {
+                "type": "UpdateSegmentSpeaker",
+                "stream_id": stream_id,
+                "segment_id": res.segment.segment_id,
+                "speaker_role": "patient",
+            }
+        )
+        ok_patient = await coordinator._run_extract_step(retries=0)
+        assert ok_patient is True
+        assert llm.extract_calls == 1
+        assert len(record.soap_manager.note.sections.S.items) == 1
+
+    asyncio.run(_run())
+
+
+def test_audio_ring_and_level_history_are_thread_safe_under_concurrent_rw() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services.conversation_service import (
+        BackendAudioLevelHistory,
+        BackendAudioPcmRingBuffer,
+    )
+
+    ring = BackendAudioPcmRingBuffer(max_history_seconds=5.0)
+    levels = BackendAudioLevelHistory(max_history_seconds=5.0)
+    pcm_chunk = b"\x00\x10\x00\x20" * 320  # 320 frames @ 16kHz = 20ms stereo
+
+    def _writer() -> None:
+        for _ in range(400):
+            ring.append_pcm16(pcm_chunk, channels=2, sample_rate=16000)
+            levels.append_pcm16(pcm_chunk, channels=2, sample_rate=16000)
+
+    def _reader() -> None:
+        for idx in range(400):
+            t = (idx % 50) * 0.02
+            ring.slice_pcm16(t, t + 0.1)
+            ring.estimate_noise_floor()
+            levels.levels_for(t, t + 0.1)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_w = pool.submit(_writer)
+        f_r = pool.submit(_reader)
+        f_w.result()
+        f_r.result()

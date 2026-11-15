@@ -63,26 +63,6 @@ export const dualMicPanelStyles = stylex.create({
     fontWeight: 600,
     color: tokens.onSurface,
   },
-  meterBlock: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.375rem",
-  },
-  meterHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    fontSize: "0.75rem",
-    color: tokens.onSurfaceVariant,
-  },
-  meter: {
-    width: "100%",
-    height: "0.75rem",
-    accentColor: tokens.primary,
-  },
-  meterActive: {
-    accentColor: tokens.tertiary,
-  },
   controls: {
     display: "flex",
     flexWrap: "wrap",
@@ -94,14 +74,5 @@ export const dualMicPanelStyles = stylex.create({
   stats: {
     fontSize: "0.8125rem",
     color: tokens.onSurfaceVariant,
-  },
-  errorBox: {
-    paddingBlock: "0.75rem",
-    paddingInline: "1rem",
-    borderRadius: tokens.cornerMedium,
-    backgroundColor: tokens.errorContainer,
-    color: tokens.onErrorContainer,
-    fontSize: "0.875rem",
-    lineHeight: 1.5,
   },
 });

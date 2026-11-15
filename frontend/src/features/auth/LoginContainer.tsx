@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { LoginCard, type LoginProviderOption } from "@/shared/components/login-card/LoginCard";
+import { LoginCard, type LoginProviderOption } from "@/shared/components";
 import { type OAuthProviderName, signInWithOAuthProvider } from "@/shared/lib/supabase/client";
+import { GoogleSignInButton } from "@/shared/ui";
 
 const LOGIN_PROVIDERS: readonly LoginProviderOption[] = [
   { id: "google", label: "Google でログイン", pendingLabel: "Google へ移動中..." },
-  { id: "discord", label: "Discord でログイン", pendingLabel: "Discord へ移動中..." },
 ];
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -28,7 +28,6 @@ export interface LoginContainerProps {
  */
 export function LoginContainer({ initialErrorCode = null, nextPath }: LoginContainerProps) {
   const [pendingProvider, setPendingProvider] = useState<OAuthProviderName | null>(null);
-  const [lastProvider, setLastProvider] = useState<OAuthProviderName>("google");
   const [errorMessage, setErrorMessage] = useState<string | null>(() =>
     initialErrorCode && initialErrorCode in ERROR_MESSAGES
       ? ERROR_MESSAGES[initialErrorCode]
@@ -37,10 +36,9 @@ export function LoginContainer({ initialErrorCode = null, nextPath }: LoginConta
 
   const startSignIn = useCallback(
     async (providerId: string) => {
-      if (providerId !== "google" && providerId !== "discord") {
+      if (providerId !== "google") {
         return;
       }
-      setLastProvider(providerId);
       setErrorMessage(null);
       setPendingProvider(providerId);
       try {
@@ -54,15 +52,23 @@ export function LoginContainer({ initialErrorCode = null, nextPath }: LoginConta
   );
 
   const handleRetry = useCallback(() => {
-    void startSignIn(lastProvider);
-  }, [lastProvider, startSignIn]);
+    void startSignIn("google");
+  }, [startSignIn]);
 
   return (
     <LoginCard
       title="ログイン"
-      description="リアルタイム文字起こしを利用するには、Google または Discord アカウントでログインしてください。"
+      description="リアルタイム文字起こしを利用するには、Google アカウントでログインしてください。"
       providers={LOGIN_PROVIDERS}
       pendingProviderId={pendingProvider}
+      renderProviderButton={({ provider, disabled, isPending, onClick }) => (
+        <GoogleSignInButton
+          label={isPending ? (provider.pendingLabel ?? provider.label) : provider.label}
+          logoSrc="/identity/google-g.png"
+          disabled={disabled}
+          onClick={onClick}
+        />
+      )}
       errorMessage={errorMessage}
       retryLabel="もう一度試す"
       onSelectProvider={(id) => {

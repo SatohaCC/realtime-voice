@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from app.clients.soap_llm_client import SoapLlmClientError, SoapLlmClientProtocol
 from app.schemas.soap import (
-    LlmExtractSpoaResult,
+    LlmExtractSoapResult,
     LlmFinalizeAResult,
     PlanItemRefModel,
     SoapEvidenceModel,
@@ -56,6 +56,19 @@ class SoapStateManager:
             processed_transcript_revision,
         )
 
+    def reset_for_rebuild(self) -> SoapApplyOutcome:
+        """無効化・再有効化後に古い要約を撤回し、有効な原文だけで再生成する。"""
+        retracted: list[str] = []
+        for key in ("S", "O", "A", "P"):
+            section = self._section_of(self._note, key)
+            retracted.extend(item.item_id for item in section.items)
+            section.items = []
+            section.revision += 1
+        self._note.sections.A.derived_from_plan_revision = None
+        self._note.processed_transcript_revision = 0
+        self._note.revision += 1
+        return SoapApplyOutcome(self.note, [], retracted, 1, 0)
+
     def build_extract_payload(
         self,
         *,
@@ -63,7 +76,7 @@ class SoapStateManager:
         all_final_segments: list[TranscriptSegmentModel],
         max_context_segments: int = 6,
     ) -> dict[str, Any]:
-        """会話中 extract_spoa 用の入力辞書を構築する（根拠発話と直近文脈も含める）。"""
+        """会話中 extract_soap 用の入力辞書を構築する（根拠発話と直近文脈も含める）。"""
         referenced_keys: set[tuple[str, str]] = set()
         for section in (
             self._note.sections.S,
@@ -117,7 +130,7 @@ class SoapStateManager:
             ],
         }
 
-    async def run_extract_spoa(
+    async def run_extract_soap(
         self,
         *,
         llm_client: SoapLlmClientProtocol,
@@ -126,13 +139,13 @@ class SoapStateManager:
         current_segments_lookup: dict[tuple[str, str], TranscriptSegmentModel],
         target_processed_transcript_revision: int,
     ) -> SoapApplyOutcome:
-        """extract_spoa を呼び出し、根拠の有効性を検証してから原子適用する。"""
+        """extract_soap を呼び出し、根拠の有効性を検証してから原子適用する。"""
         payload = self.build_extract_payload(
             new_segments=new_segments,
             all_final_segments=list(segments_snapshot_lookup.values()),
         )
-        raw_result = await llm_client.extract_spoa(payload)
-        return self.apply_extract_spoa_raw(
+        raw_result = await llm_client.extract_soap(payload)
+        return self.apply_extract_soap_raw(
             raw_result=raw_result,
             segments_lookup=current_segments_lookup,
             processed_transcript_revision=target_processed_transcript_revision,
@@ -163,7 +176,7 @@ class SoapStateManager:
             expected_plan_items=base_plan_items,
         )
 
-    def apply_extract_spoa_raw(
+    def apply_extract_soap_raw(
         self,
         *,
         raw_result: dict[str, Any],
@@ -172,7 +185,7 @@ class SoapStateManager:
     ) -> SoapApplyOutcome:
         """構造化出力を検証し、正当な差分だけを 1 回の SOAP 更新として適用する。"""
         try:
-            parsed = LlmExtractSpoaResult.model_validate(raw_result)
+            parsed = LlmExtractSoapResult.model_validate(raw_result)
         except ValidationError as exc:
             raise SoapLlmClientError(
                 "SOAP 生成モデルの出力スキーマが不正です。",
@@ -502,6 +515,117 @@ class SoapStateManager:
             rejected_operations=rejected,
         )
 
+    def reconcile_transcript_segments(
+        self,
+        segments_lookup: dict[tuple[str, str], TranscriptSegmentModel],
+    ) -> SoapApplyOutcome:
+        """後続の話者訂正・クロストーク削除に合わせて既反映 SOAP 項目を再評価・自動撤回する。"""
+        working = self._note.model_copy(deep=True)
+        changed_ids: list[str] = []
+        retracted_ids: list[str] = []
+        dirty_sections: set[SoapSectionKey] = set()
+        applied = 0
+
+        for section_key in ("S", "O", "A", "P"):
+            section_key_typed: SoapSectionKey = section_key
+            section = self._section_of(working, section_key_typed)
+            kept_items: list[SoapItemModel] = []
+
+            for item in section.items:
+                if item.origin == "plan_inference" and not item.evidence:
+                    kept_items.append(item)
+                    continue
+
+                refreshed_evidence: list[SoapEvidenceModel] = []
+                evidence_changed = False
+                requires_rebuild = False
+                for ev in item.evidence:
+                    seg = segments_lookup.get((ev.stream_id, ev.segment_id))
+                    if (
+                        seg is None
+                        or seg.status == "interim"
+                        or seg.disabled
+                        or not self._quote_matches(ev.quote, seg.text)
+                    ):
+                        evidence_changed = True
+                        requires_rebuild = True
+                        continue
+                    if seg.speaker_role != ev.speaker_role:
+                        requires_rebuild = True
+                    if (
+                        seg.segment_revision != ev.segment_revision
+                        or seg.speaker_role != ev.speaker_role
+                    ):
+                        evidence_changed = True
+                    refreshed_evidence.append(
+                        SoapEvidenceModel(
+                            stream_id=seg.stream_id,
+                            segment_id=seg.segment_id,
+                            segment_revision=seg.segment_revision,
+                            quote=ev.quote,
+                            speaker_role=seg.speaker_role,
+                        )
+                    )
+
+                if not evidence_changed:
+                    kept_items.append(item)
+                    continue
+
+                dirty_sections.add(section_key_typed)
+                applied += 1
+                # 統合本文を部分削除できないため、根拠の欠落・話者変更では全体を撤回する。
+                if (
+                    requires_rebuild
+                    or not refreshed_evidence
+                    or not self._is_section_evidence_allowed(section_key_typed, refreshed_evidence)
+                ):
+                    retracted_ids.append(item.item_id)
+                    continue
+
+                next_verification = self._resolve_verification_status(
+                    section_key_typed,
+                    item.verification_status,
+                    refreshed_evidence,
+                )
+                kept_items.append(
+                    item.model_copy(
+                        update={
+                            "item_revision": item.item_revision + 1,
+                            "evidence": refreshed_evidence,
+                            "verification_status": next_verification,
+                        }
+                    )
+                )
+                changed_ids.append(item.item_id)
+
+            section.items = kept_items
+
+        if applied > 0:
+            if dirty_sections.intersection({"S", "O", "P"}) and working.sections.A.items:
+                marked_a = False
+                for a_item in working.sections.A.items:
+                    if a_item.origin == "plan_inference" and not a_item.stale_after_plan_update:
+                        a_item.stale_after_plan_update = True
+                        a_item.item_revision += 1
+                        changed_ids.append(a_item.item_id)
+                        marked_a = True
+                if marked_a:
+                    dirty_sections.add("A")
+
+            for sec_key in dirty_sections:
+                sec = self._section_of(working, sec_key)
+                sec.revision += 1
+            working.revision += 1
+            self._note = working
+
+        return SoapApplyOutcome(
+            soap=self.note,
+            changed_item_ids=changed_ids,
+            retracted_item_ids=retracted_ids,
+            applied_operations=applied,
+            rejected_operations=0,
+        )
+
     def _mint_item_id(self, section: SoapSectionKey) -> str:
         seq = self._next_item_seq[section]
         self._next_item_seq[section] = seq + 1
@@ -529,6 +653,7 @@ class SoapStateManager:
             if (
                 seg is None
                 or seg.status == "interim"
+                or seg.disabled
                 or seg.segment_revision != ref.segment_revision
             ):
                 return []
@@ -611,6 +736,7 @@ class SoapStateManager:
             if (
                 seg is None
                 or seg.status == "interim"
+                or seg.disabled
                 or not SoapStateManager._quote_matches(ev.quote, seg.text)
             ):
                 continue
@@ -638,7 +764,7 @@ class SoapStateManager:
             return any(ev.speaker_role == "patient" for ev in evidence)
         if section in {"P", "A"}:
             return any(ev.speaker_role == "pharmacist" for ev in evidence)
-        return len(evidence) > 0
+        return any(ev.speaker_role in {"pharmacist", "patient"} for ev in evidence)
 
     @staticmethod
     def _resolve_verification_status(

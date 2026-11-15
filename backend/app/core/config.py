@@ -119,6 +119,11 @@ def _normalize_llm_provider(raw: str | None) -> str:
 _load_dotenv_files()
 
 
+DEFAULT_SPEAKER_MODEL_PATH = (
+    "../.cache/speaker-poc/models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
+)
+
+
 @dataclass(frozen=True)
 class Settings:
     """環境変数から読み込むアプリケーション設定。"""
@@ -242,6 +247,69 @@ class Settings:
     )
     ws_send_queue_maxsize: int = field(
         default_factory=lambda: _parse_positive_int(os.getenv("WS_SEND_QUEUE_MAXSIZE"), default=256)
+    )
+    speaker_recognition_enabled: bool = field(
+        default_factory=lambda: _parse_bool(os.getenv("SPEAKER_RECOGNITION_ENABLED"), default=True)
+    )
+    speaker_model_id: str = field(
+        default_factory=lambda: (
+            os.getenv("SPEAKER_MODEL_ID", "3dspeaker_campplus_zh_en_16k_contiguous_v2").strip()
+            or "3dspeaker_campplus_zh_en_16k_contiguous_v2"
+        )
+    )
+    speaker_model_path: str = field(
+        default_factory=lambda: (
+            os.getenv("SPEAKER_MODEL_PATH", DEFAULT_SPEAKER_MODEL_PATH).strip()
+            or DEFAULT_SPEAKER_MODEL_PATH
+        )
+    )
+    speaker_num_threads: int = field(
+        default_factory=lambda: _parse_positive_int(os.getenv("SPEAKER_NUM_THREADS"), default=2)
+    )
+    speaker_pcm_history_seconds: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SPEAKER_PCM_HISTORY_SECONDS"), default=45.0
+        )
+    )
+    speaker_pharmacist_high_threshold: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SPEAKER_PHARMACIST_HIGH_THRESHOLD"), default=0.50
+        )
+    )
+    speaker_pharmacist_low_threshold: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SPEAKER_PHARMACIST_LOW_THRESHOLD"), default=0.35
+        )
+    )
+    speaker_patient_low_threshold: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SPEAKER_PATIENT_LOW_THRESHOLD"), default=0.35
+        )
+    )
+    speaker_margin_threshold: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SPEAKER_MARGIN_THRESHOLD"), default=0.08
+        )
+    )
+    speaker_min_embed_seconds: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SPEAKER_MIN_EMBED_SECONDS"), default=0.6
+        )
+    )
+    speaker_rms_dominance_ratio: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SPEAKER_RMS_DOMINANCE_RATIO"), default=1.8
+        )
+    )
+    speaker_enrollment_min_voiced_seconds: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SPEAKER_ENROLLMENT_MIN_VOICED_SECONDS"), default=2.5
+        )
+    )
+    speaker_enrollment_max_bytes: int = field(
+        default_factory=lambda: _parse_positive_int(
+            os.getenv("SPEAKER_ENROLLMENT_MAX_BYTES"), default=16000 * 2 * 30
+        )
     )
     transcription_protocol_version: int = 1
 

@@ -71,7 +71,174 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-const session = () => ({ sendAudio: vi.fn(), close: vi.fn(async () => {}) });
+const session = () => ({
+  sendAudio: vi.fn(),
+  updateSegmentSpeaker: vi.fn(),
+  setSegmentEnabled: vi.fn(),
+  close: vi.fn(async () => {}),
+});
+
+async function stoppedConversationForEnabledTest() {
+  mocks.connect.mockResolvedValue(session());
+  const hook = renderHook(() => useRealtimeTranscription());
+  act(() => hook.result.current.toggleTranscription());
+  await waitFor(() => expect(hook.result.current.isStreaming).toBe(true));
+  const options = mocks.connect.mock.calls[0][0];
+  const conversationId = options.conversationId ?? "";
+  act(() =>
+    options.onConversationEvent?.({
+      type: "TranscriptUpdated",
+      protocol_version: 1,
+      conversation_id: conversationId,
+      event_id: "enabled-test",
+      sequence: 1,
+      segment: {
+        stream_id: "s1",
+        segment_id: "seg-1",
+        segment_revision: 1,
+        transcript_revision: 1,
+        channel_index: 1,
+        speaker_role: "patient",
+        speaker_label: "患者",
+        text: "頭が痛いです",
+        status: "final",
+        start_sec: 0,
+        end_sec: 1,
+        confidence: 0.9,
+      },
+    }),
+  );
+  act(() => hook.result.current.toggleTranscription());
+  await waitFor(() => expect(hook.result.current.isStreaming).toBe(false));
+  return { hook, conversationId };
+}
+
+it("停止中の無効化はクリック直後に反映し、原文とIDを保持する", async () => {
+  const body = deferred<unknown>();
+  const fetchMock = vi.fn(async () => ({ ok: true, json: () => body.promise }));
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    const { hook, conversationId } = await stoppedConversationForEnabledTest();
+    const segment = hook.result.current.conversation.segments[0];
+    act(() => hook.result.current.setSegmentEnabled("s1", "seg-1", false));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(hook.result.current.conversation.segments[0].disabled).toBe(true);
+    expect(hook.result.current.isSegmentUpdatePending).toBe(true);
+    await act(async () =>
+      body.resolve({
+        conversation_id: conversationId,
+        segment: { ...segment, disabled: true, segment_revision: 2 },
+        soap: { ...createEmptySoapNote(conversationId), revision: 1 },
+        soap_status: "ready",
+        has_unapplied_transcript: false,
+      }),
+    );
+    expect(hook.result.current.conversation.segments).toHaveLength(1);
+    expect(hook.result.current.conversation.segments[0]).toMatchObject({
+      text: segment.text,
+      segment_id: segment.segment_id,
+      disabled: true,
+    });
+    expect(hook.result.current.isSegmentUpdatePending).toBe(false);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("確定通知で操作を解放し、古いSOAP応答が再有効化を巻き戻さない", async () => {
+  const connection = () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start: (value) => {
+        controller = value;
+      },
+    });
+    return {
+      response: new Response(body, { headers: { "content-type": "application/x-ndjson" } }),
+      send: (value: unknown) =>
+        controller.enqueue(new TextEncoder().encode(`${JSON.stringify(value)}\n`)),
+      close: () => controller.close(),
+    };
+  };
+  const first = connection();
+  const second = connection();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValueOnce(first.response).mockResolvedValueOnce(second.response),
+  );
+  try {
+    const { hook, conversationId } = await stoppedConversationForEnabledTest();
+    const original = hook.result.current.conversation.segments[0];
+    const payload = (revision: number, disabled: boolean, soapRevision: number) => ({
+      conversation_id: conversationId,
+      segment: { ...original, segment_revision: revision, disabled },
+      soap: { ...createEmptySoapNote(conversationId), revision: soapRevision },
+      soap_status: "pending",
+      has_unapplied_transcript: true,
+    });
+    act(() => hook.result.current.setSegmentEnabled("s1", "seg-1", false));
+    first.send(payload(2, true, 1));
+    await waitFor(() => expect(hook.result.current.isSegmentUpdatePending).toBe(false));
+    act(() => hook.result.current.setSegmentEnabled("s1", "seg-1", true));
+    expect(hook.result.current.conversation.segments[0].disabled).toBe(false);
+    await act(async () => {
+      first.send({ ...payload(2, true, 2), soap_status: "ready" });
+      first.close();
+    });
+    expect(hook.result.current.conversation.segments[0].disabled).toBe(false);
+    expect(hook.result.current.isSegmentUpdatePending).toBe(true);
+    second.send({ ...payload(3, false, 3), soap_status: "ready" });
+    second.close();
+    await waitFor(() => expect(hook.result.current.isSegmentUpdatePending).toBe(false));
+    expect(hook.result.current.conversation.segments[0].disabled).toBe(false);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("無効化APIの失敗時は原文の有効状態を維持してエラーを表示する", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({ ok: false })),
+  );
+  try {
+    const { hook } = await stoppedConversationForEnabledTest();
+    act(() => hook.result.current.setSegmentEnabled("s1", "seg-1", false));
+    await waitFor(() => expect(hook.result.current.error).toContain("変更できません"));
+    expect(hook.result.current.conversation.segments).toHaveLength(1);
+    expect(hook.result.current.conversation.segments[0].disabled).not.toBe(true);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("応答本文の待機中に新しい会話へ切り替えても古いSOAPを反映しない", async () => {
+  const body = deferred<unknown>();
+  const json = vi.fn(() => body.promise);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({ ok: true, json })),
+  );
+  try {
+    const { hook, conversationId } = await stoppedConversationForEnabledTest();
+    const segment = hook.result.current.conversation.segments[0];
+    act(() => hook.result.current.setSegmentEnabled("s1", "seg-1", false));
+    await waitFor(() => expect(json).toHaveBeenCalledOnce());
+    act(() => hook.result.current.startNewConversation());
+    const nextId = hook.result.current.conversation.conversationId;
+    await act(async () =>
+      body.resolve({
+        conversation_id: conversationId,
+        segment: { ...segment, disabled: true },
+        soap: { ...createEmptySoapNote(conversationId), revision: 9 },
+      }),
+    );
+    expect(hook.result.current.conversation.soap.conversation_id).toBe(nextId);
+    expect(hook.result.current.conversation.segments).toHaveLength(0);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 it("入力デバイスの確定前に接続せず、確定した2入力で収音する", async () => {
   const selection = deferred<{ mic1DeviceId: string; mic2DeviceId: string }>();
@@ -531,5 +698,10 @@ it("会話イベント受信・新しい会話開始・重複デバイス遮断�
   act(() => hook.result.current.toggleTranscription());
   await waitFor(() => expect(hook.result.current.isStreaming).toBe(true));
   expect(mocks.connect.mock.calls[2][0].conversationId).not.toBe(firstConversationId);
+  act(() => hook.result.current.updateSegmentSpeaker("stream-3", "seg-1", "patient"));
+  const activeSession = await mocks.connect.mock.results[2].value;
+  expect(activeSession.updateSegmentSpeaker).toHaveBeenCalledWith("stream-3", "seg-1", "patient");
+  act(() => hook.result.current.setSegmentEnabled("stream-3", "seg-2", false));
+  expect(activeSession.setSegmentEnabled).toHaveBeenCalledWith("stream-3", "seg-2", false);
   hook.unmount();
 });

@@ -8,7 +8,7 @@ import {
   sanitizeRedirectPath,
 } from "./config";
 
-export type OAuthProviderName = "google" | "discord";
+export type OAuthProviderName = "google";
 
 let browserClient: SupabaseClient | null = null;
 
@@ -27,7 +27,7 @@ export function getBrowserSupabaseClient(): SupabaseClient | null {
 }
 
 /**
- * Google / Discord による OAuth (PKCE) ログインを開始する。
+ * Google による OAuth (PKCE) ログインを開始する。
  */
 export async function signInWithOAuthProvider(
   provider: OAuthProviderName,

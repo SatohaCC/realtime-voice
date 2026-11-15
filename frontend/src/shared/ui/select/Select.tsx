@@ -28,7 +28,9 @@ export interface SelectProps {
   onValueChange?: (value: string | null) => void;
   placeholder?: string;
   disabled?: boolean;
+  size?: "sm" | "md";
   style?: stylex.StyleXStyles;
+  triggerStyle?: stylex.StyleXStyles;
 }
 
 /**
@@ -43,10 +45,15 @@ export function Select({
   onValueChange,
   placeholder = "選択してください",
   disabled = false,
+  size = "md",
   style,
+  triggerStyle,
 }: SelectProps) {
+  const iconSize = size === "sm" ? 14 : 16;
   return (
-    <div {...stylex.props(s.root, hideLabel && s.rootCompact, style)}>
+    <div
+      {...stylex.props(s.root, hideLabel && s.rootCompact, size === "sm" && s.rootInline, style)}
+    >
       <UiSelect
         value={value}
         defaultValue={defaultValue}
@@ -57,12 +64,23 @@ export function Select({
         <SelectLabel {...stylex.props(s.label, hideLabel && s.labelHidden)}>{label}</SelectLabel>
         <SelectTrigger
           className={({ disabled: isDisabled }) =>
-            stylex.props(s.trigger, isDisabled && s.triggerDisabled).className
+            stylex.props(
+              s.trigger,
+              size === "sm" && s.triggerSm,
+              triggerStyle,
+              isDisabled && s.triggerDisabled,
+            ).className
           }
         >
           <SelectValue placeholder={placeholder} {...stylex.props(s.value)} />
           <span {...stylex.props(s.chevron)} aria-hidden="true">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <svg
+              width={iconSize}
+              height={iconSize}
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+            >
               <path
                 d="M6 9L12 15L18 9"
                 stroke="currentColor"
@@ -74,7 +92,7 @@ export function Select({
           </span>
         </SelectTrigger>
 
-        <SelectContent sideOffset={6} {...stylex.props(s.content)}>
+        <SelectContent sideOffset={6} {...stylex.props(s.content, size === "sm" && s.contentSm)}>
           {options.map((option) => (
             <SelectItem
               key={option.value}
@@ -84,8 +102,8 @@ export function Select({
               className={({ selected, highlighted, disabled: itemDisabled }) =>
                 stylex.props(
                   s.item,
-                  highlighted && s.itemHighlighted,
                   selected && s.itemSelected,
+                  highlighted && s.itemHighlighted,
                   itemDisabled && s.itemDisabled,
                 ).className
               }

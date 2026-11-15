@@ -40,17 +40,9 @@ export const loginCardStyles = stylex.create({
     width: "100%",
     justifyContent: "center",
   },
-  errorBox: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-start",
-    gap: "0.75rem",
-    backgroundColor: tokens.errorContainer,
-    color: tokens.onErrorContainer,
+  errorBanner: {
     borderRadius: tokens.cornerLarge,
     padding: "1rem",
-    fontSize: "0.875rem",
-    lineHeight: 1.5,
   },
   errorText: {
     margin: 0,

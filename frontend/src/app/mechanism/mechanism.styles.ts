@@ -4,6 +4,8 @@ import { tokens } from "../../shared/styles/tokens.stylex";
 // 従来M3のトークンとアクセシブルな構造を使った「仕組み」解説ページのスタイル定義。
 export const mechanismStyles = stylex.create({
   page: {
+    minWidth: 0,
+    overflowWrap: "anywhere",
     maxWidth: "80rem",
     marginInline: "auto",
     paddingInline: { default: "2.5rem", "@media (max-width: 599px)": "1.25rem" },
@@ -75,14 +77,16 @@ export const mechanismStyles = stylex.create({
     gridTemplateColumns: {
       default: "repeat(5, minmax(0, 1fr))",
       "@media (max-width: 1120px)": "repeat(2, minmax(0, 1fr))",
-      "@media (max-width: 599px)": "1fr",
+      "@media (max-width: 599px)": "minmax(0, 1fr)",
     },
     gap: "0.875rem",
   },
   pipelineItem: {
     display: "flex",
+    minWidth: 0,
   },
   pipelineCard: {
+    minWidth: 0,
     display: "flex",
     flexDirection: "column",
     gap: "0.625rem",
@@ -129,14 +133,16 @@ export const mechanismStyles = stylex.create({
     display: "grid",
     gridTemplateColumns: {
       default: "repeat(2, minmax(0, 1fr))",
-      "@media (max-width: 839px)": "1fr",
+      "@media (max-width: 839px)": "minmax(0, 1fr)",
     },
     gap: "1rem",
   },
   logicItem: {
     display: "flex",
+    minWidth: 0,
   },
   logicCard: {
+    minWidth: 0,
     display: "flex",
     flexDirection: "column",
     gap: "0.75rem",
@@ -174,7 +180,7 @@ export const mechanismStyles = stylex.create({
     display: "grid",
     gridTemplateColumns: {
       default: "repeat(4, minmax(0, 1fr))",
-      "@media (max-width: 839px)": "1fr",
+      "@media (max-width: 839px)": "minmax(0, 1fr)",
     },
     gap: "0.875rem",
   },
@@ -203,6 +209,8 @@ export const mechanismStyles = stylex.create({
   tableWrap: {
     width: "100%",
     overflowX: "auto",
+    scrollbarWidth: "auto",
+    scrollbarColor: "var(--scrollbar-thumb) var(--scrollbar-track)",
     borderRadius: tokens.cornerLarge,
     borderWidth: 1,
     borderStyle: "solid",

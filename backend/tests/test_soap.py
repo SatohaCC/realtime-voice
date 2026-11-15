@@ -29,7 +29,7 @@ def test_fake_long_utterance_quotes_remain_literal_and_apply(index: int, section
         )
         lookup = {(segment.stream_id, segment.segment_id): segment}
         manager = SoapStateManager(conversation_id=conv.conversation_id)
-        outcome = await manager.run_extract_spoa(
+        outcome = await manager.run_extract_soap(
             llm_client=FakeSoapLlmClient(),
             new_segments=[segment],
             segments_snapshot_lookup=lookup,
@@ -55,7 +55,7 @@ def test_invalid_quote_rejects_whole_batch_without_advancing_revision(mixed: boo
     if mixed:
         refs.insert(0, _evidence(conv.segments[3]))
     with pytest.raises(SoapLlmClientError):
-        manager.apply_extract_spoa_raw(
+        manager.apply_extract_soap_raw(
             raw_result={
                 "operations": [
                     {
@@ -77,7 +77,7 @@ def test_invalid_quote_rejects_whole_batch_without_advancing_revision(mixed: boo
 def test_quote_accepts_substring_with_whitespace_differences() -> None:
     conv, lookup = _setup_conversation()
     manager = SoapStateManager(conversation_id=conv.conversation_id)
-    outcome = manager.apply_extract_spoa_raw(
+    outcome = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -98,7 +98,7 @@ def test_final_a_does_not_replace_invalid_explicit_quote_with_inherited_evidence
     async def _run() -> None:
         conv, lookup = _setup_conversation()
         manager = SoapStateManager(conversation_id=conv.conversation_id)
-        await manager.run_extract_spoa(
+        await manager.run_extract_soap(
             llm_client=FakeSoapLlmClient(),
             new_segments=conv.finalized_segments,
             segments_snapshot_lookup=lookup,
@@ -130,7 +130,7 @@ def test_plan_update_drops_old_quote_removed_by_transcript_refinement() -> None:
     conv, lookup = _setup_conversation()
     manager = SoapStateManager(conversation_id=conv.conversation_id)
     original = conv.segments[3]
-    first = manager.apply_extract_spoa_raw(
+    first = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -146,7 +146,7 @@ def test_plan_update_drops_old_quote_removed_by_transcript_refinement() -> None:
     )
     refined = original.model_copy(update={"text": "その指導を撤回します。", "segment_revision": 2})
     lookup[(refined.stream_id, refined.segment_id)] = refined
-    outcome = manager.apply_extract_spoa_raw(
+    outcome = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -173,7 +173,7 @@ def test_retraction_requires_section_speaker_evidence(
 ) -> None:
     conv, lookup = _setup_conversation()
     manager = SoapStateManager(conversation_id=conv.conversation_id)
-    first = manager.apply_extract_spoa_raw(
+    first = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -189,7 +189,7 @@ def test_retraction_requires_section_speaker_evidence(
     )
     item_id = getattr(first.soap.sections, section).items[0].item_id
     for evidence_index, expected in [(wrong_index, 0), (index, 1)]:
-        outcome = manager.apply_extract_spoa_raw(
+        outcome = manager.apply_extract_soap_raw(
             raw_result={
                 "operations": [
                     {
@@ -265,7 +265,7 @@ def test_role_validation_blocks_patient_in_p_or_a_and_pharmacist_in_s() -> None:
     patient_seg = conv.segments[1]
     pharmacist_seg = conv.segments[0]
 
-    outcome = manager.apply_extract_spoa_raw(
+    outcome = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -329,7 +329,7 @@ def test_atomic_update_section_move_and_retract_validation() -> None:
     patient_seg = conv.segments[1]
     pharmacist_plan = conv.segments[3]
 
-    first = manager.apply_extract_spoa_raw(
+    first = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -367,7 +367,7 @@ def test_atomic_update_section_move_and_retract_validation() -> None:
     p_id = first.soap.sections.P.items[0].item_id
 
     # 空の出力だけでは既存要素が消えないこと、理由なし撤回は拒否されること
-    unchanged = manager.apply_extract_spoa_raw(
+    unchanged = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -393,14 +393,14 @@ def test_atomic_update_section_move_and_retract_validation() -> None:
 
     # 未知IDや無効スキーマに対する耐性
     with pytest.raises(SoapLlmClientError):
-        manager.apply_extract_spoa_raw(
+        manager.apply_extract_soap_raw(
             raw_result={"operations": [{"action": "invalid"}]},
             segments_lookup=lookup,
             processed_transcript_revision=conv.transcript_revision,
         )
 
     # S -> O への欄移動と P の更新が 1 つの revision で原子適用されること
-    moved = manager.apply_extract_spoa_raw(
+    moved = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -451,14 +451,14 @@ def test_inferred_a_tracks_so_changes_after_resume(section: str, action: str) ->
         conv, lookup = _setup_conversation()
         manager = SoapStateManager(conversation_id=conv.conversation_id)
         llm = FakeSoapLlmClient()
-        await manager.run_extract_spoa(
+        await manager.run_extract_soap(
             llm_client=llm,
             new_segments=conv.finalized_segments,
             segments_snapshot_lookup=lookup,
             current_segments_lookup=lookup,
             target_processed_transcript_revision=conv.transcript_revision,
         )
-        manager.apply_extract_spoa_raw(
+        manager.apply_extract_soap_raw(
             raw_result={
                 "operations": [
                     {
@@ -487,7 +487,7 @@ def test_inferred_a_tracks_so_changes_after_resume(section: str, action: str) ->
             op["target_section"] = "O" if section == "S" else "S"
         if action == "retract":
             op["retraction_reason"] = "発言の訂正"
-        outcome = manager.apply_extract_spoa_raw(
+        outcome = manager.apply_extract_soap_raw(
             raw_result={"operations": [op]},
             segments_lookup=lookup,
             processed_transcript_revision=conv.transcript_revision + 1,
@@ -514,7 +514,7 @@ def test_fake_llm_flow_preserves_spoken_a_and_marks_stale_after_resume_p_update(
         manager = SoapStateManager(conversation_id=conv.conversation_id)
         fake_llm = FakeSoapLlmClient()
 
-        extract_outcome = await manager.run_extract_spoa(
+        extract_outcome = await manager.run_extract_soap(
             llm_client=fake_llm,
             new_segments=conv.finalized_segments,
             segments_snapshot_lookup=lookup,
@@ -565,7 +565,7 @@ def test_fake_llm_flow_preserves_spoken_a_and_marks_stale_after_resume_p_update(
         )
         assert resumed.segment is not None
         updated_lookup = {(seg.stream_id, seg.segment_id): seg for seg in conv.segments}
-        resumed_outcome = await manager.run_extract_spoa(
+        resumed_outcome = await manager.run_extract_soap(
             llm_client=fake_llm,
             new_segments=[resumed.segment],
             segments_snapshot_lookup=updated_lookup,
@@ -617,7 +617,7 @@ def test_s_consolidates_multiple_patient_utterances_into_single_item() -> None:
     lookup = {(seg.stream_id, seg.segment_id): seg for seg in conv.segments}
     manager = SoapStateManager(conversation_id=conv.conversation_id)
 
-    first = manager.apply_extract_spoa_raw(
+    first = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -635,7 +635,7 @@ def test_s_consolidates_multiple_patient_utterances_into_single_item() -> None:
     s_id = first.soap.sections.S.items[0].item_id
 
     # モデルが誤って 2 件目の add を返しても既存 S 項目へ統合され、根拠も両方保持されること
-    merged = manager.apply_extract_spoa_raw(
+    merged = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -658,7 +658,7 @@ def test_s_consolidates_multiple_patient_utterances_into_single_item() -> None:
     assert len(s_item.evidence) == 2
 
     # 通常の update でも既存 S 根拠が失われずに統合されること
-    updated = manager.apply_extract_spoa_raw(
+    updated = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -708,7 +708,7 @@ def test_fake_llm_consolidates_batch_plan_utterances_and_updates_single_item() -
         manager = SoapStateManager(conversation_id=conv.conversation_id)
         fake_llm = FakeSoapLlmClient()
 
-        first = await manager.run_extract_spoa(
+        first = await manager.run_extract_soap(
             llm_client=fake_llm,
             new_segments=conv.finalized_segments,
             segments_snapshot_lookup=lookup,
@@ -736,7 +736,7 @@ def test_fake_llm_consolidates_batch_plan_utterances_and_updates_single_item() -
         )
         assert correction.segment is not None
         updated_lookup = {(seg.stream_id, seg.segment_id): seg for seg in conv.segments}
-        second = await manager.run_extract_spoa(
+        second = await manager.run_extract_soap(
             llm_client=fake_llm,
             new_segments=[correction.segment],
             segments_snapshot_lookup=updated_lookup,
@@ -770,7 +770,7 @@ def test_finalize_a_skips_when_plan_empty_and_discards_stale_concurrent_p_change
     assert empty_p.soap.sections.A.items == []
 
     # A(会話由来) と P を追加後、expected_plan_items が食い違う古い推測結果を破棄する
-    added = manager.apply_extract_spoa_raw(
+    added = manager.apply_extract_soap_raw(
         raw_result={
             "operations": [
                 {
@@ -830,7 +830,7 @@ def test_langchain_soap_llm_client_uses_pydantic_schemas_caches_and_handles_gemi
 
     from app.clients import soap_llm_client
     from app.clients.soap_llm_client import LangChainSoapLlmClient, get_default_soap_llm_client
-    from app.schemas.soap import LlmExtractSpoaResult, LlmFinalizeAResult
+    from app.schemas.soap import LlmExtractSoapResult, LlmFinalizeAResult
 
     init_calls: list[tuple[str, dict[str, Any]]] = []
     schema_calls: list[type[Any]] = []
@@ -842,8 +842,8 @@ def test_langchain_soap_llm_client_uses_pydantic_schemas_caches_and_handles_gemi
 
         async def ainvoke(self, messages: Any) -> Any:
             invoked_messages.append(messages)
-            if self._schema is LlmExtractSpoaResult:
-                return LlmExtractSpoaResult(operations=[])
+            if self._schema is LlmExtractSoapResult:
+                return LlmExtractSoapResult(operations=[])
             return LlmFinalizeAResult(operations=[])
 
     class _FakeModel:
@@ -869,8 +869,8 @@ def test_langchain_soap_llm_client_uses_pydantic_schemas_caches_and_handles_gemi
             thinking_budget=0,
             _thinking_budget_set=True,
         )
-        res1 = await client.extract_spoa({"new_segments": []})
-        res2 = await client.extract_spoa({"new_segments": []})
+        res1 = await client.extract_soap({"new_segments": []})
+        res2 = await client.extract_soap({"new_segments": []})
         res3 = await client.finalize_a_from_p({"plan_items": []})
 
         assert res1 == {"operations": []}
@@ -883,7 +883,7 @@ def test_langchain_soap_llm_client_uses_pydantic_schemas_caches_and_handles_gemi
         assert init_calls[0][1]["thinking_config"] == {"thinking_level": "minimal"}
         assert "temperature" not in init_calls[0][1]
         assert init_calls[1][0] == "gemini-3.8-flash"
-        assert schema_calls == [LlmExtractSpoaResult, LlmFinalizeAResult]
+        assert schema_calls == [LlmExtractSoapResult, LlmFinalizeAResult]
 
         # Gemini 2.5 Flash 系では thinking_budget=0 と temperature=0 を渡す
         flash25_client = LangChainSoapLlmClient(
@@ -892,7 +892,7 @@ def test_langchain_soap_llm_client_uses_pydantic_schemas_caches_and_handles_gemi
             thinking_budget=0,
             _thinking_budget_set=True,
         )
-        await flash25_client.extract_spoa({"new_segments": []})
+        await flash25_client.extract_soap({"new_segments": []})
         assert init_calls[-1][1]["thinking_budget"] == 0
         assert init_calls[-1][1]["temperature"] == 0
 
@@ -903,7 +903,7 @@ def test_langchain_soap_llm_client_uses_pydantic_schemas_caches_and_handles_gemi
             thinking_budget=0,
             _thinking_budget_set=True,
         )
-        await pro_client.extract_spoa({"new_segments": []})
+        await pro_client.extract_soap({"new_segments": []})
         assert "thinking_budget" not in init_calls[-1][1]
         assert "thinking_config" not in init_calls[-1][1]
 
@@ -950,7 +950,7 @@ def test_langchain_soap_llm_client_wraps_missing_api_key_value_error(
     async def _run() -> None:
         client = LangChainSoapLlmClient(provider="google_genai", model="gemini-3.5-flash-lite")
         with pytest.raises(SoapLlmClientError) as exc_info:
-            await client.extract_spoa({"new_segments": []})
+            await client.extract_soap({"new_segments": []})
         assert exc_info.value.code == "LLM_NOT_CONFIGURED"
 
     asyncio.run(_run())
@@ -981,7 +981,7 @@ def test_extract_payload_includes_recent_context_and_trims_it_before_failing() -
         with_context_len = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         assert with_context_len > without_context_len
         fake = FakeSoapLlmClient(max_input_chars=without_context_len + 5)
-        outcome = await manager.run_extract_spoa(
+        outcome = await manager.run_extract_soap(
             llm_client=fake,
             new_segments=[conv.finalized_segments[-1]],
             segments_snapshot_lookup=lookup,
@@ -991,3 +991,147 @@ def test_extract_payload_includes_recent_context_and_trims_it_before_failing() -
         assert outcome.applied_operations == 2
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize("section,channel,new_role", [("S", 1, "pharmacist"), ("P", 0, "patient")])
+def test_reconcile_retracts_whole_summary_when_one_of_two_speakers_changes(
+    section: str, channel: int, new_role: str
+) -> None:
+    conv = ConversationTranscriptState(conversation_id="summary-correction")
+    conv.start_stream("s1")
+    for start, text in enumerate(("頭が痛いです", "吐き気があります")):
+        conv.apply_deepgram_event(
+            DeepgramTranscriptInput(channel, text, True, True, start * 2, start * 2 + 1, 0.9)
+        )
+    first, second = conv.finalized_segments
+    manager = SoapStateManager(conversation_id=conv.conversation_id)
+    added = manager.apply_extract_soap_raw(
+        raw_result={
+            "operations": [
+                {
+                    "section": section,
+                    "action": "add",
+                    "text": "頭痛と吐き気。",
+                    "evidence_refs": [_evidence(first), _evidence(second)],
+                }
+            ]
+        },
+        segments_lookup={(s.stream_id, s.segment_id): s for s in conv.finalized_segments},
+        processed_transcript_revision=conv.transcript_revision,
+    )
+    item_id = getattr(added.soap.sections, section).items[0].item_id
+    corrected = second.model_copy(update={"speaker_role": new_role, "segment_revision": 2})
+    outcome = manager.reconcile_transcript_segments(
+        {
+            (first.stream_id, first.segment_id): first,
+            (second.stream_id, second.segment_id): corrected,
+        }
+    )
+    assert getattr(outcome.soap.sections, section).items == []
+    assert item_id in outcome.retracted_item_ids
+
+
+def test_unknown_speaker_blocked_and_reconcile_retracts_invalidated_soap_items() -> None:
+    from app.schemas.soap import TranscriptSegmentModel
+
+    conv = ConversationTranscriptState(conversation_id="conv-reconcile")
+    conv.start_stream("s1")
+    patient_seg = TranscriptSegmentModel(
+        stream_id="s1",
+        segment_id="seg-1",
+        segment_revision=1,
+        transcript_revision=1,
+        channel_index=1,
+        speaker_role="patient",
+        speaker_label="患者",
+        text="昨日から胃が痛いです",
+        status="final",
+        start_sec=0.2,
+        end_sec=1.6,
+        confidence=0.95,
+    )
+    unknown_seg = TranscriptSegmentModel(
+        stream_id="s1",
+        segment_id="seg-2",
+        segment_revision=1,
+        transcript_revision=2,
+        channel_index=0,
+        speaker_role="unknown",
+        speaker_label="話者不明",
+        text="別の薬局でもらいました",
+        status="final",
+        start_sec=2.0,
+        end_sec=3.0,
+        confidence=0.9,
+    )
+    lookup = {
+        ("s1", "seg-1"): patient_seg,
+        ("s1", "seg-2"): unknown_seg,
+    }
+    manager = SoapStateManager(conversation_id="conv-reconcile")
+
+    # 1. unknown のみの根拠で S へ追加しようとしても拒否される
+    rejected = manager.apply_extract_soap_raw(
+        raw_result={
+            "operations": [
+                {
+                    "action": "add",
+                    "section": "S",
+                    "text": "別の薬局での処方あり",
+                    "evidence_refs": [
+                        {
+                            "stream_id": "s1",
+                            "segment_id": "seg-2",
+                            "segment_revision": 1,
+                            "quote": "別の薬局でもらいました",
+                        }
+                    ],
+                }
+            ]
+        },
+        segments_lookup=lookup,
+        processed_transcript_revision=2,
+    )
+    assert rejected.rejected_operations == 1
+    assert rejected.soap.sections.S.items == []
+
+    # 2. patient 根拠で S を生成したあと、後から話者が pharmacist に訂正されると自動撤回される
+    added = manager.apply_extract_soap_raw(
+        raw_result={
+            "operations": [
+                {
+                    "action": "add",
+                    "section": "S",
+                    "text": "昨日からの胃痛を訴え",
+                    "evidence_refs": [
+                        {
+                            "stream_id": "s1",
+                            "segment_id": "seg-1",
+                            "segment_revision": 1,
+                            "quote": "昨日から胃が痛いです",
+                        }
+                    ],
+                }
+            ]
+        },
+        segments_lookup=lookup,
+        processed_transcript_revision=2,
+    )
+    assert len(added.soap.sections.S.items) == 1
+    s_item_id = added.soap.sections.S.items[0].item_id
+
+    corrected_lookup = {
+        ("s1", "seg-1"): patient_seg.model_copy(
+            update={
+                "segment_revision": 2,
+                "speaker_role": "pharmacist",
+                "speaker_label": "薬剤師",
+                "status": "refined",
+            }
+        ),
+        ("s1", "seg-2"): unknown_seg,
+    }
+    reconciled = manager.reconcile_transcript_segments(corrected_lookup)
+    assert s_item_id in reconciled.retracted_item_ids
+    assert reconciled.soap.sections.S.items == []
+    assert reconciled.soap.revision > added.soap.revision
