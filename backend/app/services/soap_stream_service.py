@@ -41,6 +41,7 @@ from app.services.conversation_service import (
     DeepgramTranscriptInput,
 )
 from app.services.soap_service import SoapStateManager
+from app.services.speaker_audio_service import select_speaker_audio
 
 _QueuePriority = Literal["high", "status", "interim"]
 
@@ -394,17 +395,26 @@ class _SoapSessionCoordinator:
             return None
         if not self._record.transcript_state.needs_speaker_embedding(parsed):
             return None
-        sliced = self._record.transcript_state.slice_pcm16(parsed.start_sec, parsed.end_sec)
+        start_sec, end_sec = self._record.transcript_state.speaker_embedding_interval(parsed)
+        sliced = self._record.transcript_state.slice_pcm16(start_sec, end_sec)
         if sliced is None:
             return None
         pcm_bytes, channels, sample_rate = sliced
         channel_idx = 1 if parsed.channel_index == 1 and channels == 2 else 0
+        selected = select_speaker_audio(
+            pcm_bytes, sample_rate=sample_rate, channels=channels, channel_index=channel_idx
+        )
+        if (
+            selected.voiced_sec < settings.speaker_min_embed_seconds
+            or selected.clipped_fraction >= 0.01
+        ):
+            return None
         try:
             return self._speaker_client.extract_embedding_from_pcm16(
-                pcm_bytes,
+                selected.pcm16_bytes,
                 sample_rate=sample_rate,
-                channels=channels,
-                channel_index=channel_idx,
+                channels=1,
+                channel_index=0,
             )
         except SpeakerEmbeddingClientError:
             return None

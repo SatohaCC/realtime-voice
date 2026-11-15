@@ -1,4 +1,5 @@
 import { createDualMicCapture } from "../audio/dualMicCapture";
+import { EnrollmentSpeechMeter } from "./enrollmentSpeechMeter";
 
 export interface EnrollSpeakerApiResponse {
   model_id: string;
@@ -15,10 +16,13 @@ export interface EnrollPharmacistOptions {
   accessToken: string;
   micDeviceId: string;
   durationMs?: number;
+  minVoicedSeconds?: number;
+  sampleCount?: number;
   sampleRate?: number;
   signal?: AbortSignal;
   onProgress?: (ratio: number) => void;
   onLevel?: (level: number) => void;
+  onSample?: (index: number) => void;
   captureFactory?: typeof createDualMicCapture;
   fetchFn?: typeof fetch;
 }
@@ -41,11 +45,14 @@ function concatArrayBuffers(chunks: readonly ArrayBuffer[]): Uint8Array {
 export async function enrollPharmacistVoice({
   accessToken,
   micDeviceId,
-  durationMs = 4000,
+  durationMs = 5000,
+  minVoicedSeconds = 0,
+  sampleCount = 1,
   sampleRate = 16000,
   signal,
   onProgress,
   onLevel,
+  onSample,
   captureFactory = createDualMicCapture,
   fetchFn = fetch,
 }: EnrollPharmacistOptions): Promise<EnrollSpeakerApiResponse> {
@@ -53,50 +60,96 @@ export async function enrollPharmacistVoice({
     throw new Error("声紋登録を行うにはログインが必要です。");
   }
   signal?.throwIfAborted();
+  if (!Number.isInteger(sampleCount) || sampleCount < 1 || sampleCount > 3) {
+    throw new Error("登録回数は1〜3回で指定してください。");
+  }
+  if (
+    !Number.isFinite(durationMs) ||
+    durationMs < 1000 ||
+    durationMs > 10000 ||
+    sampleRate !== 16000 ||
+    !Number.isFinite(minVoicedSeconds) ||
+    minVoicedSeconds < 0 ||
+    minVoicedSeconds > durationMs / 1000
+  ) {
+    throw new Error("登録音声は16kHz・最大10秒で、有効音声の目標を録音時間内に指定してください。");
+  }
 
   const chunks: ArrayBuffer[] = [];
-  let captureError: Error | null = null;
-  let elapsedFrames = 0;
-  const targetFrames = Math.max(1, Math.round((durationMs / 1000) * sampleRate));
+  const sampleFrames: number[] = [];
+  for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
+    signal?.throwIfAborted();
+    onSample?.(sampleIndex);
+    signal?.throwIfAborted();
+    let captureError: Error | null = null;
+    let elapsedFrames = 0;
+    let voicedSeconds = 0;
+    let onEnoughAudio: (() => void) | undefined;
+    const speechMeter = new EnrollmentSpeechMeter();
+    const targetFrames = Math.max(1, Math.round((durationMs / 1000) * sampleRate));
 
-  const session = await captureFactory({
-    mic1DeviceId: micDeviceId,
-    signal,
-    onAudioFrame: (frame) => {
-      chunks.push(frame.pcm16);
-      elapsedFrames += frame.pcm16.byteLength / (2 * frame.channels);
-      onLevel?.(frame.levels[0]);
-      onProgress?.(Math.min(1, elapsedFrames / targetFrames));
-    },
-    onError: (err) => {
-      captureError = err;
-    },
-  });
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      if (signal?.aborted) {
-        reject(new DOMException("登録をキャンセルしました。", "AbortError"));
-        return;
-      }
-      const onAbort = () => {
-        clearTimeout(timer);
-        reject(new DOMException("登録をキャンセルしました。", "AbortError"));
-      };
-      const timer = setTimeout(() => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      }, durationMs);
-      signal?.addEventListener("abort", onAbort, { once: true });
+    const session = await captureFactory({
+      mic1DeviceId: micDeviceId,
+      autoGainControl: false,
+      signal,
+      onAudioFrame: (frame) => {
+        if (frame.sampleRate !== sampleRate || frame.channels !== 1) {
+          captureError = new Error("登録音声の形式が一致しません。");
+          return;
+        }
+        const usable = Math.min(frame.pcm16.byteLength, (targetFrames - elapsedFrames) * 2);
+        if (usable <= 0) return;
+        const pcm16 = frame.pcm16.slice(0, usable);
+        chunks.push(pcm16);
+        elapsedFrames += usable / 2;
+        voicedSeconds = speechMeter.append(pcm16);
+        onLevel?.(frame.levels[0]);
+        const takeProgress =
+          minVoicedSeconds > 0 ? voicedSeconds / minVoicedSeconds : elapsedFrames / targetFrames;
+        onProgress?.((sampleIndex + Math.min(1, takeProgress)) / sampleCount);
+        if (minVoicedSeconds > 0 && voicedSeconds >= minVoicedSeconds) onEnoughAudio?.();
+      },
+      onError: (err) => {
+        captureError = err;
+      },
     });
-  } finally {
-    await session.stop();
-  }
 
-  if (captureError) {
-    throw captureError;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new DOMException("登録をキャンセルしました。", "AbortError"));
+          return;
+        }
+        const onAbort = () => {
+          clearTimeout(timer);
+          onEnoughAudio = undefined;
+          reject(new DOMException("登録をキャンセルしました。", "AbortError"));
+        };
+        const finish = () => {
+          clearTimeout(timer);
+          onEnoughAudio = undefined;
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        };
+        const timer = setTimeout(finish, durationMs);
+        onEnoughAudio = finish;
+        signal?.addEventListener("abort", onAbort, { once: true });
+        if (minVoicedSeconds > 0 && voicedSeconds >= minVoicedSeconds) finish();
+      });
+    } finally {
+      await session.stop();
+    }
+
+    if (captureError) {
+      throw captureError;
+    }
+    signal?.throwIfAborted();
+
+    if (elapsedFrames < sampleRate) {
+      throw new Error("収音データが不足しています。マイク設定を確認してやり直してください。");
+    }
+    sampleFrames.push(elapsedFrames);
   }
-  signal?.throwIfAborted();
 
   const pcmPayload = concatArrayBuffers(chunks);
   chunks.length = 0;
@@ -104,7 +157,9 @@ export async function enrollPharmacistVoice({
     throw new Error("収音データが不足しています。マイク設定を確認してやり直してください。");
   }
 
-  const response = await fetchFn(`/api/speakers/enroll?sample_rate=${sampleRate}`, {
+  const boundaries =
+    sampleCount > 1 ? sampleFrames.map((count) => `&sample_frames=${count}`).join("") : "";
+  const response = await fetchFn(`/api/speakers/enroll?sample_rate=${sampleRate}${boundaries}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,

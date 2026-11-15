@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.schemas.soap import SpeakerRole
 from app.schemas.speaker import SpeakerEnrollmentResponse
 from app.services.audio_vad_service import compute_pcm16_channel_rms
+from app.services.speaker_audio_service import select_speaker_audio
 
 
 class SpeakerEnrollmentError(Exception):
@@ -200,6 +201,7 @@ def enroll_pharmacist_pcm16(
     client: SpeakerEmbeddingClientProtocol | None = None,
     min_voiced_seconds: float | None = None,
     max_bytes: int | None = None,
+    sample_frames: Sequence[int] | None = None,
 ) -> SpeakerEnrollmentResponse:
     """事前登録用の薬剤師音声から話者ベクトルを抽出し、品質メタ情報付きで返す（保存は行わない）。"""
     resolved_max_bytes = (
@@ -213,7 +215,7 @@ def enroll_pharmacist_pcm16(
 
     if len(pcm16_bytes) > resolved_max_bytes:
         raise SpeakerEnrollmentError(
-            "登録音声が長すぎます。15秒以内で録音してください。",
+            "登録音声がサイズ上限を超えています。録音設定を確認してください。",
             code="ENROLLMENT_TOO_LARGE",
             status_code=413,
         )
@@ -224,11 +226,52 @@ def enroll_pharmacist_pcm16(
             status_code=400,
         )
 
-    quality = analyze_pcm16_quality(pcm16_bytes, sample_rate=sample_rate)
-    if quality.voiced_sec < resolved_min_voiced:
+    frames = list(sample_frames) if sample_frames is not None else [len(pcm16_bytes) // 2]
+    if (
+        sample_rate <= 0
+        or not 1 <= len(frames) <= 3
+        or any(n <= 0 for n in frames)
+        or sum(frames) * 2 != len(pcm16_bytes)
+    ):
         raise SpeakerEnrollmentError(
-            f"有効な発声時間が短すぎます（検出 {quality.voiced_sec:.1f} 秒 / "
-            f"必要 {resolved_min_voiced:.1f} 秒以上）。静かな環境で 3〜5 秒話してください。",
+            "登録音声の区切りが不正です。", code="ENROLLMENT_INVALID_SAMPLES", status_code=422
+        )
+    selected_parts: list[bytes] = []
+    voiced_durations: list[float] = []
+    offset = 0
+    for idx, count in enumerate(frames):
+        selected = select_speaker_audio(
+            pcm16_bytes[offset : offset + count * 2], sample_rate=sample_rate
+        )
+        offset += count * 2
+        if selected.clipped_fraction >= 0.01:
+            raise SpeakerEnrollmentError(
+                f"{idx + 1}回目の録音が音割れしています。マイクから離して再登録してください。",
+                code="ENROLLMENT_CLIPPED",
+                status_code=422,
+            )
+        selected_parts.append(selected.pcm16_bytes)
+        voiced_durations.append(selected.voiced_sec)
+
+    quality = analyze_pcm16_quality(pcm16_bytes, sample_rate=sample_rate)
+    quality = EnrollmentAudioQuality(
+        quality.duration_sec,
+        sum(voiced_durations),
+        quality.rms_level,
+        quality.peak_level,
+        quality.warnings,
+    )
+    insufficient_sample = next(
+        (i for i, duration in enumerate(voiced_durations) if duration < resolved_min_voiced),
+        None,
+    )
+    if insufficient_sample is not None:
+        detected_sec = voiced_durations[insufficient_sample]
+        raise SpeakerEnrollmentError(
+            f"{insufficient_sample + 1}回目の有効な発声時間が短すぎます"
+            f"（検出 {detected_sec:.1f} 秒 / "
+            f"必要 {resolved_min_voiced:.1f} 秒以上）。マイクに近づき、"
+            "進捗が満たされるまで通常の声で文章を読み上げてください。",
             code="ENROLLMENT_INSUFFICIENT_SPEECH",
             status_code=422,
         )
@@ -252,20 +295,39 @@ def enroll_pharmacist_pcm16(
         )
 
     try:
-        embedding = resolved_client.extract_embedding_from_pcm16(
-            pcm16_bytes,
-            sample_rate=sample_rate,
-            channels=1,
-            channel_index=0,
-        )
+        embeddings: list[list[float]] = []
+        for part in selected_parts:
+            raw_embedding = resolved_client.extract_embedding_from_pcm16(
+                part, sample_rate=sample_rate, channels=1, channel_index=0
+            )
+            normalized = normalize_embedding(raw_embedding or [])
+            if normalized is None:
+                break
+            embeddings.append(normalized)
     except SpeakerEmbeddingClientError as exc:
         raise SpeakerEnrollmentError(str(exc), code=exc.code, status_code=500) from exc
 
-    if not embedding:
+    if len(embeddings) != len(selected_parts):
         raise SpeakerEnrollmentError(
             "音声から話者特徴を抽出できませんでした。もう少し長く明瞭に話してください。",
             code="ENROLLMENT_EXTRACTION_FAILED",
             status_code=422,
+        )
+
+    if any(
+        len(a) != len(b) or cosine_similarity(a, b) < settings.speaker_pharmacist_high_threshold
+        for i, a in enumerate(embeddings)
+        for b in embeddings[i + 1 :]
+    ):
+        raise SpeakerEnrollmentError(
+            "録音ごとの声紋が一致しません。他の人の声が入らない環境で再登録してください。",
+            code="ENROLLMENT_INCONSISTENT",
+            status_code=422,
+        )
+    embedding = normalize_embedding([sum(v) for v in zip(*embeddings, strict=True)])
+    if embedding is None:
+        raise SpeakerEnrollmentError(
+            "声紋を統合できませんでした。", code="ENROLLMENT_EXTRACTION_FAILED", status_code=422
         )
 
     return SpeakerEnrollmentResponse(
@@ -295,6 +357,11 @@ class ConversationSpeakerTracker:
         self._pharmacist_model_id: str | None = None
         self._patient_centroid: list[float] | None = None
         self._patient_update_count = 0
+        self._voiceprint_requested = False
+
+    @property
+    def voiceprint_requested(self) -> bool:
+        return self._voiceprint_requested
 
     @property
     def has_pharmacist_profile(self) -> bool:
@@ -315,6 +382,7 @@ class ConversationSpeakerTracker:
         embedding: Sequence[float],
     ) -> tuple[bool, str | None]:
         """端末ローカル保存から受け取った薬剤師声紋を会話メモリへ反映する。"""
+        self._voiceprint_requested = True
         if model_id.strip() != self._expected_model_id:
             return (
                 False,
@@ -350,14 +418,17 @@ class ConversationSpeakerTracker:
 
         # 薬剤師声紋が未登録の環境では、従来どおりチャンネル基準にフォールバックする
         if self._pharmacist_embedding is None:
+            role: SpeakerRole = "unknown" if self._voiceprint_requested else fallback_role
             return SpeakerVerificationDecision(
-                speaker_role=fallback_role,
-                speaker_label=SPEAKER_LABEL_BY_ROLE[fallback_role],
+                speaker_role=role,
+                speaker_label=SPEAKER_LABEL_BY_ROLE[role],
                 pharmacist_similarity=None,
                 patient_similarity=None,
                 used_embedding=False,
                 is_short_utterance=duration_sec < self._thresholds.min_embed_sec,
-                reason="no_pharmacist_profile",
+                reason="profile_unavailable"
+                if self._voiceprint_requested
+                else "no_pharmacist_profile",
             )
 
         is_short = duration_sec < self._thresholds.min_embed_sec
@@ -367,21 +438,8 @@ class ConversationSpeakerTracker:
             else None
         )
 
-        # 短い返答（「はい」「いいえ」等）や埋め込み未抽出時は音量優位で暫定割当し、拮抗時は unknown
+        # 声紋の登録後は、抽出失敗をマイク番号による話者判定に置き換えない
         if seg_vec is None:
-            if (
-                self_rms >= min_signal
-                and self_rms >= other_rms * self._thresholds.rms_dominance_ratio
-            ):
-                return SpeakerVerificationDecision(
-                    speaker_role=fallback_role,
-                    speaker_label=SPEAKER_LABEL_BY_ROLE[fallback_role],
-                    pharmacist_similarity=None,
-                    patient_similarity=None,
-                    used_embedding=False,
-                    is_short_utterance=is_short,
-                    reason="short_channel_dominant",
-                )
             return SpeakerVerificationDecision(
                 speaker_role="unknown",
                 speaker_label=SPEAKER_LABEL_BY_ROLE["unknown"],
@@ -389,13 +447,13 @@ class ConversationSpeakerTracker:
                 patient_similarity=None,
                 used_embedding=False,
                 is_short_utterance=is_short,
-                reason="short_ambiguous",
+                reason="short_ambiguous" if is_short else "embedding_unavailable",
             )
 
         if len(seg_vec) != len(self._pharmacist_embedding):
             return SpeakerVerificationDecision(
-                speaker_role=fallback_role,
-                speaker_label=SPEAKER_LABEL_BY_ROLE[fallback_role],
+                speaker_role="unknown",
+                speaker_label=SPEAKER_LABEL_BY_ROLE["unknown"],
                 pharmacist_similarity=None,
                 patient_similarity=None,
                 used_embedding=False,
@@ -453,19 +511,15 @@ class ConversationSpeakerTracker:
 
         # 3. 薬剤師に明確に不一致かつ患者マイク (ch1) 優位の音声を会話限定の患者重心として登録・判定
         if (
-            channel_index == 1
+            self._patient_centroid is None
+            and channel_index == 1
             and sim_p < self._thresholds.pharmacist_low
+            and duration_sec >= self._thresholds.min_patient_init_sec
             and self_rms >= min_signal
             and self_rms >= other_rms * self._thresholds.rms_dominance_ratio
         ):
-            if duration_sec >= self._thresholds.min_patient_init_sec:
-                if self._patient_centroid is None:
-                    self._patient_centroid = list(seg_vec)
-                else:
-                    self._patient_centroid = merge_centroid(
-                        self._patient_centroid, seg_vec, alpha=0.1
-                    )
-                self._patient_update_count += 1
+            self._patient_centroid = list(seg_vec)
+            self._patient_update_count += 1
             return SpeakerVerificationDecision(
                 speaker_role="patient",
                 speaker_label=SPEAKER_LABEL_BY_ROLE["patient"],

@@ -68,6 +68,14 @@ describe("useSpeakerEnrollment", () => {
       }),
     );
     expect(result.current.voiceprint?.modelId).toBe("campp-v1");
+    expect(mocks.enrollPharmacistVoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        durationMs: 10000,
+        minVoicedSeconds: 3,
+        sampleCount: 3,
+        onSample: expect.any(Function),
+      }),
+    );
 
     await act(async () => {
       await result.current.clear();

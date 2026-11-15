@@ -176,6 +176,79 @@ def _plan_message(start: float = 0) -> str:
     )
 
 
+def test_short_voiceprint_pool_uses_selected_audio_and_emits_refinement() -> None:
+    import struct
+
+    vector = [1.0] + [0.0] * 31
+
+    class SpeakerClient:
+        model_id = "3dspeaker_campplus_zh_en_16k_contiguous_v2"
+        embedding_dim = 32
+        received: list[int] = []
+
+        def extract_embedding_from_pcm16(
+            self,
+            pcm16_bytes: bytes,
+            *,
+            sample_rate: int = 16000,
+            channels: int = 1,
+            channel_index: int = 0,
+        ) -> list[float]:
+            assert (sample_rate, channels, channel_index) == (16000, 1, 0)
+            assert set(struct.unpack(f"<{len(pcm16_bytes) // 2}h", pcm16_bytes)) <= {0, 4000}
+            self.received.append(len(pcm16_bytes))
+            return vector
+
+    async def run() -> None:
+        record, coordinator = _coordinator(FakeSoapLlmClient())
+        speaker = SpeakerClient()
+        coordinator._speaker_client = speaker
+        state = record.transcript_state
+        assert state.set_pharmacist_profile(model_id=speaker.model_id, embedding=vector)[0]
+        # 2つの短発話の間には50msの無音がある。別chの音は混ぜない。
+        for amplitude, duration in [(4000, 0.35), (0, 0.05), (4000, 0.35)]:
+            state.append_pcm16(
+                struct.pack("<hh", amplitude, 100) * round(16000 * duration),
+                channels=2,
+                sample_rate=16000,
+            )
+        await coordinator.handle_deepgram_message_async(
+            _dg_result(
+                channel=0,
+                text="はい",
+                is_final=True,
+                speech_final=True,
+                start=0,
+                duration=0.35,
+            )
+        )
+        assert state.finalized_segments[0].speaker_role == "unknown"
+        assert speaker.received == []
+        await coordinator.handle_deepgram_message_async(
+            _dg_result(
+                channel=0,
+                text="そうです",
+                is_final=True,
+                speech_final=True,
+                start=0.4,
+                duration=0.35,
+            )
+        )
+        assert len(speaker.received) == 1
+        assert speaker.received[0] / 32000 == pytest.approx(0.75)
+        assert [s.speaker_role for s in state.finalized_segments] == ["pharmacist", "pharmacist"]
+        assert state.finalized_segments[0].status == "refined"
+        emitted = [json.loads(payload) for _, payload in coordinator._queue._items]
+        assert any(
+            event.get("type") == "TranscriptUpdated"
+            and event["segment"]["status"] == "refined"
+            and event["segment"]["speaker_role"] == "pharmacist"
+            for event in emitted
+        )
+
+    asyncio.run(run())
+
+
 def test_precision_defaults_disable_mixing_and_audio_cutting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -879,7 +952,7 @@ def test_ws_speaker_profile_not_forwarded_to_deepgram_and_verifies_bleed() -> No
     assert pharm_vec is not None
 
     class _StubSpeakerClient:
-        model_id = "3dspeaker_campplus_zh_en_16k"
+        model_id = "3dspeaker_campplus_zh_en_16k_contiguous_v2"
         embedding_dim = 32
 
         def __init__(self, vec: list[float]) -> None:
@@ -910,7 +983,7 @@ def test_ws_speaker_profile_not_forwarded_to_deepgram_and_verifies_bleed() -> No
                 json.dumps(
                     {
                         "type": "SpeakerProfile",
-                        "model_id": "3dspeaker_campplus_zh_en_16k",
+                        "model_id": "3dspeaker_campplus_zh_en_16k_contiguous_v2",
                         "embedding": pharm_vec,
                     }
                 ),
@@ -978,7 +1051,7 @@ def test_ws_replaces_inferior_other_channel_duplicate_with_removed_event() -> No
     assert pharm_vec is not None
 
     class _StubSpeakerClient:
-        model_id = "3dspeaker_campplus_zh_en_16k"
+        model_id = "3dspeaker_campplus_zh_en_16k_contiguous_v2"
         embedding_dim = 32
 
         def __init__(self, vec: list[float]) -> None:
@@ -1007,7 +1080,7 @@ def test_ws_replaces_inferior_other_channel_duplicate_with_removed_event() -> No
                 json.dumps(
                     {
                         "type": "SpeakerProfile",
-                        "model_id": "3dspeaker_campplus_zh_en_16k",
+                        "model_id": "3dspeaker_campplus_zh_en_16k_contiguous_v2",
                         "embedding": pharm_vec,
                     }
                 ),

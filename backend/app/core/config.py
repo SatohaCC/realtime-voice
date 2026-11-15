@@ -253,8 +253,8 @@ class Settings:
     )
     speaker_model_id: str = field(
         default_factory=lambda: (
-            os.getenv("SPEAKER_MODEL_ID", "3dspeaker_campplus_zh_en_16k").strip()
-            or "3dspeaker_campplus_zh_en_16k"
+            os.getenv("SPEAKER_MODEL_ID", "3dspeaker_campplus_zh_en_16k_contiguous_v2").strip()
+            or "3dspeaker_campplus_zh_en_16k_contiguous_v2"
         )
     )
     speaker_model_path: str = field(
@@ -308,7 +308,7 @@ class Settings:
     )
     speaker_enrollment_max_bytes: int = field(
         default_factory=lambda: _parse_positive_int(
-            os.getenv("SPEAKER_ENROLLMENT_MAX_BYTES"), default=16000 * 2 * 15
+            os.getenv("SPEAKER_ENROLLMENT_MAX_BYTES"), default=16000 * 2 * 30
         )
     )
     transcription_protocol_version: int = 1

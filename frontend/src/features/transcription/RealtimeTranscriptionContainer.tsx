@@ -398,18 +398,24 @@ export function RealtimeTranscriptionContainer() {
               ? "success"
               : "neutral",
           descriptionText: speaker.isEnrolling
-            ? "薬剤師マイクに向かって通常音量で 4 秒ほど話してください。"
+            ? `録音 ${speaker.sampleIndex + 1}/3（最大10秒）：進捗が満たされるまで読み上げてください。${
+                [
+                  "こんにちは。今日はお薬の飲み方を確認します。いつもの声でゆっくりお話しください。",
+                  "朝と夜の食事の後に、お水で飲んでください。飲み忘れたときは薬局にご相談ください。",
+                  "気になることや体調の変化はありますか。普段の生活や食事についても教えてください。",
+                ][speaker.sampleIndex]
+              }`
             : speaker.voiceprint
               ? `アカウント紐づけ済み（有音 ${speaker.voiceprint.voicedSec.toFixed(1)} 秒）`
-              : "事前に 4 秒登録すると、2マイクの回り込みと薬剤師識別を補助します。",
-          actionLabel: speaker.voiceprint ? "声紋を再登録" : "4秒で声紋登録",
+              : "薬剤師マイクに向かって3回読み上げます。各回、有効音声が約3秒分集まると次へ進みます（最大10秒）。",
+          actionLabel: speaker.voiceprint ? "声紋を再登録" : "3回録音して声紋登録",
           cancelLabel: "録音中止",
           clearLabel: "削除",
           isEnrolling: speaker.isEnrolling,
           canEnroll: !isActive && !isConnecting && !isStopping && Boolean(audio.mic1DeviceId),
           canClear: !isActive && !isConnecting && !isStopping && Boolean(speaker.voiceprint),
           progressRatio: speaker.progressRatio,
-          progressLabel: `${Math.round(speaker.progressRatio * 100)}%`,
+          progressLabel: `有効音声 ${Math.round(speaker.progressRatio * 100)}%`,
           warningMessages: speaker.warnings,
           errorMessage: speaker.error,
           onEnroll: () => {

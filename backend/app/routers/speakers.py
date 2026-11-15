@@ -17,6 +17,7 @@ async def enroll_speaker(
     request: Request,
     _: Annotated[AuthenticatedUser, Depends(get_current_user)],
     sample_rate: int = Query(default=16000, ge=8000, le=48000),
+    sample_frames: Annotated[list[int] | None, Query(max_length=3)] = None,
 ) -> SpeakerEnrollmentResponse:
     """薬剤師の事前登録音声（モノラル 16bit PCM）から話者特徴ベクトルを抽出し、永続化せず返す。"""
     content_length = request.headers.get("content-length")
@@ -28,7 +29,7 @@ async def enroll_speaker(
         if declared_size > settings.speaker_enrollment_max_bytes:
             raise HTTPException(
                 status_code=413,
-                detail="登録音声が長すぎます。15秒以内で録音してください。",
+                detail="登録音声がサイズ上限を超えています。録音設定を確認してください。",
             )
 
     pcm16_bytes = await request.body()
@@ -37,6 +38,7 @@ async def enroll_speaker(
             enroll_pharmacist_pcm16,
             pcm16_bytes,
             sample_rate=sample_rate,
+            sample_frames=sample_frames,
         )
     except SpeakerEnrollmentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

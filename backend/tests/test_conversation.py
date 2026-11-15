@@ -252,9 +252,30 @@ def test_pcm_ring_buffer_slices_and_clears() -> None:
     assert channels == 2
     assert sr == 16000
     assert len(pcm_bytes) == 16000 * 2 * 2
+    assert ring.slice_pcm16(1.5, 3.0) is None
 
     ring.clear()
     assert ring.slice_pcm16(0.5, 1.5) is None
+
+
+@pytest.mark.parametrize("valid_profile", [True, False])
+def test_voiceprint_interims_and_rejected_profiles_do_not_guess_roles(valid_profile: bool) -> None:
+    state = ConversationTranscriptState(conversation_id="no-guesses")
+    state.start_stream()
+    model_id = (
+        "3dspeaker_campplus_zh_en_16k_contiguous_v2"
+        if valid_profile
+        else "3dspeaker_campplus_zh_en_16k"
+    )
+    accepted, _ = state.set_pharmacist_profile(model_id=model_id, embedding=[1.0] + [0.0] * 31)
+    assert accepted is valid_profile
+    state.append_audio_levels(duration_sec=3, levels=(0.01, 0.2))
+    for is_final in [False, True]:
+        result = state.apply_deepgram_event(
+            DeepgramTranscriptInput(1, "飲み方を確認します", is_final, is_final, 0, 2, 0.9)
+        )
+        assert result.segment is not None
+        assert result.segment.speaker_role == "unknown"
 
 
 def test_voiceprint_crosstalk_integration_and_delayed_short_refinement() -> None:
@@ -268,7 +289,7 @@ def test_voiceprint_crosstalk_integration_and_delayed_short_refinement() -> None
     state = ConversationTranscriptState(conversation_id="conv-voiceprint")
     state.start_stream("s1")
     ok, _ = state.set_pharmacist_profile(
-        model_id="3dspeaker_campplus_zh_en_16k", embedding=pharm_vec
+        model_id="3dspeaker_campplus_zh_en_16k_contiguous_v2", embedding=pharm_vec
     )
     assert ok is True
 
@@ -299,7 +320,7 @@ def test_voiceprint_crosstalk_integration_and_delayed_short_refinement() -> None
     state_ref = ConversationTranscriptState(conversation_id="conv-refine")
     state_ref.start_stream("s1")
     assert state_ref.set_pharmacist_profile(
-        model_id="3dspeaker_campplus_zh_en_16k", embedding=pharm_vec
+        model_id="3dspeaker_campplus_zh_en_16k_contiguous_v2", embedding=pharm_vec
     )[0]
     # 前半0.4秒は ch0/ch1 拮抗（unknown になりやすい短発話）、後半2秒は ch1 優位（患者確定）
     state_ref.append_pcm16(
@@ -325,10 +346,53 @@ def test_voiceprint_crosstalk_integration_and_delayed_short_refinement() -> None
     )
     assert anchor_out.segment is not None
     assert anchor_out.segment.speaker_role == "patient"
-    assert len(anchor_out.refined_segments) == 1
-    assert anchor_out.refined_segments[0].segment_id == short_out.segment.segment_id
-    assert anchor_out.refined_segments[0].speaker_role == "patient"
-    assert anchor_out.refined_segments[0].status == "refined"
+    # 直後の話者が判明しても、音量が拮抗した別区間の話者を推測で変更しない
+    assert anchor_out.refined_segments == ()
+    assert state_ref.finalized_segments[0].speaker_role == "unknown"
+
+
+def test_accumulated_short_audio_refines_only_with_embedding_and_resets_on_stream() -> None:
+    state = ConversationTranscriptState(conversation_id="short-pool")
+    state.start_stream()
+    vec = [1.0] + [0.0] * 31
+    assert state.set_pharmacist_profile(
+        model_id="3dspeaker_campplus_zh_en_16k_contiguous_v2", embedding=vec
+    )[0]
+    state.append_audio_levels(duration_sec=3, levels=(0.1, 0.01))
+    first = DeepgramTranscriptInput(0, "はい", True, True, 0.0, 0.35, 0.9)
+    second = DeepgramTranscriptInput(0, "そうです", True, True, 0.4, 0.75, 0.9)
+    assert not state.needs_speaker_embedding(first)
+    state.apply_deepgram_event(first)
+    assert state.finalized_segments[0].speaker_role == "unknown"
+    assert state.needs_speaker_embedding(second)
+    assert state.speaker_embedding_interval(second) == (0.0, 0.75)
+    result = state.apply_deepgram_event(second, segment_embedding=vec)
+    assert result.segment is not None and result.segment.speaker_role == "pharmacist"
+    assert len(result.refined_segments) == 1
+    assert result.refined_segments[0].speaker_role == "pharmacist"
+    state.start_stream()
+    state.append_audio_levels(duration_sec=3, levels=(0.1, 0.01))
+    assert not state.needs_speaker_embedding(second)
+
+
+@pytest.mark.parametrize(
+    "other_channel,gap,levels",
+    [(True, 0.05, (0.1, 0.01)), (False, 1.0, (0.1, 0.01)), (False, 0.05, (0.1, 0.09))],
+)
+def test_short_pool_excludes_interruptions_long_gaps_and_ambiguous_levels(
+    other_channel: bool, gap: float, levels: tuple[float, float]
+) -> None:
+    state = ConversationTranscriptState(conversation_id="short-safe")
+    state.start_stream()
+    assert state.set_pharmacist_profile(
+        model_id="3dspeaker_campplus_zh_en_16k_contiguous_v2", embedding=[1.0] + [0.0] * 31
+    )[0]
+    state.append_audio_levels(duration_sec=3, levels=levels)
+    state.apply_deepgram_event(DeepgramTranscriptInput(0, "はい", True, True, 0, 0.35, 0.9))
+    if other_channel:
+        state.apply_deepgram_event(DeepgramTranscriptInput(1, "ええ", True, True, 0.1, 0.3, 0.9))
+    event = DeepgramTranscriptInput(0, "そうです", True, True, 0.35 + gap, 0.7 + gap, 0.9)
+    assert not state.needs_speaker_embedding(event)
 
 
 def test_voiceprint_deduplicates_same_speaker_bleed_regardless_of_order_length_and_kana() -> None:
@@ -342,7 +406,7 @@ def test_voiceprint_deduplicates_same_speaker_bleed_regardless_of_order_length_a
     state = ConversationTranscriptState(conversation_id="conv-dup-sym")
     state.start_stream("s1")
     assert state.set_pharmacist_profile(
-        model_id="3dspeaker_campplus_zh_en_16k", embedding=pharm_vec
+        model_id="3dspeaker_campplus_zh_en_16k_contiguous_v2", embedding=pharm_vec
     )[0]
 
     # 近接マイク配置を模擬: ch0=4200, ch1=3800（音量比 1.11 倍で従来の 1.8 倍未満）

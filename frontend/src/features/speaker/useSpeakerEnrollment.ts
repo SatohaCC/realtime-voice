@@ -19,6 +19,7 @@ export interface UseSpeakerEnrollmentResult {
   voiceprint: PharmacistVoiceprintRecord | null;
   isEnrolling: boolean;
   progressRatio: number;
+  sampleIndex: number;
   warnings: readonly string[];
   error: string | null;
   enroll: (micDeviceId: string) => Promise<void>;
@@ -35,6 +36,7 @@ export function useSpeakerEnrollment(): UseSpeakerEnrollmentResult {
   const [voiceprint, setVoiceprint] = useState<PharmacistVoiceprintRecord | null>(null);
   const [isEnrolling, setIsEnrolling] = useState(false);
   const [progressRatio, setProgressRatio] = useState(0);
+  const [sampleIndex, setSampleIndex] = useState(0);
   const [warnings, setWarnings] = useState<readonly string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -100,6 +102,7 @@ export function useSpeakerEnrollment(): UseSpeakerEnrollmentResult {
     abortRef.current = controller;
     setIsEnrolling(true);
     setProgressRatio(0);
+    setSampleIndex(0);
     setWarnings([]);
     setError(null);
 
@@ -114,7 +117,10 @@ export function useSpeakerEnrollment(): UseSpeakerEnrollmentResult {
       const apiResult = await enrollPharmacistVoice({
         accessToken: token,
         micDeviceId,
-        durationMs: 4000,
+        durationMs: 10000,
+        minVoicedSeconds: 3,
+        sampleCount: 3,
+        onSample: setSampleIndex,
         signal: controller.signal,
         onProgress: setProgressRatio,
       });
@@ -180,6 +186,7 @@ export function useSpeakerEnrollment(): UseSpeakerEnrollmentResult {
     voiceprint,
     isEnrolling,
     progressRatio,
+    sampleIndex,
     warnings,
     error,
     enroll,

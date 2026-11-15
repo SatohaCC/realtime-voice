@@ -178,14 +178,14 @@ def test_conversation_speaker_tracker_verification_and_unknown_guard() -> None:
     assert d4.patient_similarity is not None
     assert d4.patient_similarity > 0.9
 
-    # 5. 短発話（「はい」等）は音量差があれば暫定役割、拮抗時は unknown（除外せず保持対象）
+    # 5. 短発話（「はい」等）は音量差だけで話者を確定せず unknown で保持する
     d_short_clear = tracker.verify_segment(
         channel_index=1,
         duration_sec=0.3,
         channel_levels=(0.005, 0.03),
         segment_embedding=None,
     )
-    assert d_short_clear.speaker_role == "patient"
+    assert d_short_clear.speaker_role == "unknown"
     assert d_short_clear.is_short_utterance is True
 
     d_short_tie = tracker.verify_segment(
@@ -218,10 +218,15 @@ def test_speaker_enroll_endpoint_requires_auth_and_returns_vector(
         expires_at=9999999999,
     )
     try:
+        received_boundaries: list[list[int] | None] = []
 
         def _fake_enroll(
-            pcm16_bytes: bytes, *, sample_rate: int = 16000
+            pcm16_bytes: bytes,
+            *,
+            sample_rate: int = 16000,
+            sample_frames: list[int] | None = None,
         ) -> SpeakerEnrollmentResponse:
+            received_boundaries.append(sample_frames)
             return SpeakerEnrollmentResponse(
                 model_id="campp-v1",
                 embedding_dim=32,
@@ -244,6 +249,14 @@ def test_speaker_enroll_endpoint_requires_auth_and_returns_vector(
         assert body["model_id"] == "campp-v1"
         assert body["embedding_dim"] == 32
         assert len(body["embedding"]) == 32
+        assert received_boundaries == [None]
+        resp = client.post(
+            "/api/speakers/enroll?sample_frames=48000&sample_frames=48000&sample_frames=48000",
+            content=pcm * 3,
+            headers={"Authorization": "Bearer dummy"},
+        )
+        assert resp.status_code == 200
+        assert received_boundaries[-1] == [48000, 48000, 48000]
     finally:
         app.dependency_overrides.clear()
 
@@ -269,3 +282,88 @@ def test_cosine_similarity_and_missing_model_error(tmp_path: Path) -> None:
             sample_rate=16000,
         )
     assert exc.value.code == "SPEAKER_MODEL_NOT_FOUND"
+
+
+@pytest.mark.parametrize("channel", [0, 1])
+@pytest.mark.parametrize("embedding", [None, [1.0] + [0.0] * 15])
+def test_registered_profile_never_guesses_role_when_embedding_is_unavailable(
+    channel: int, embedding: list[float] | None
+) -> None:
+    tracker = ConversationSpeakerTracker(expected_model_id="test")
+    assert tracker.set_pharmacist_profile(model_id="test", embedding=_basis_vec(0))[0]
+    decision = tracker.verify_segment(
+        channel_index=channel,
+        duration_sec=3,
+        channel_levels=(0.2, 0.01) if channel == 0 else (0.01, 0.2),
+        segment_embedding=embedding,
+    )
+    assert decision.speaker_role == "unknown"
+    assert not tracker.has_patient_centroid
+
+
+def test_patient_centroid_rejects_unmatched_voices_and_remains_stable() -> None:
+    tracker = ConversationSpeakerTracker(expected_model_id="test")
+    assert tracker.set_pharmacist_profile(model_id="test", embedding=_basis_vec(0))[0]
+
+    def verify(embedding: list[float]) -> Any:
+        return tracker.verify_segment(
+            channel_index=1,
+            duration_sec=3,
+            channel_levels=(0.01, 0.2),
+            segment_embedding=embedding,
+        )
+
+    patient = verify(_basis_vec(1))
+    assert patient.speaker_role == "patient"
+    for _ in range(30):
+        result = verify(_basis_vec(2))
+        assert result.speaker_role == "unknown"
+    assert tracker.patient_update_count == 1
+    matched = verify(_basis_vec(1))
+    assert matched.speaker_role == "patient"
+    assert matched.patient_similarity == pytest.approx(1)
+
+
+@pytest.mark.parametrize("silence_seconds", [1, 7])
+def test_multiple_enrollment_samples_are_selected_and_averaged(silence_seconds: int) -> None:
+    calls: list[int] = []
+
+    class Client(_FakeSpeakerClient):
+        def extract_embedding_from_pcm16(self, pcm16_bytes: bytes, **kwargs: Any) -> list[float]:
+            calls.append(len(pcm16_bytes))
+            return _basis_vec(0, noise=0.01 * len(calls))
+
+    speech = _make_pcm16(3000, 3)
+    silence = bytes(16000 * 2 * silence_seconds)
+    take = silence + speech
+    result = enroll_pharmacist_pcm16(take * 3, client=Client(), sample_frames=[len(take) // 2] * 3)
+    assert calls == [len(take)] * 3
+    assert result.voiced_sec == 9
+    assert result.embedding == pytest.approx(
+        normalize_embedding(
+            [
+                sum(v)
+                for v in zip(*[_basis_vec(0, noise=n) for n in (0.01, 0.02, 0.03)], strict=True)
+            ]
+        )
+    )
+
+
+def test_enrollment_rejects_inconsistent_clipped_and_individually_short_samples() -> None:
+    class Client(_FakeSpeakerClient):
+        calls = 0
+
+        def extract_embedding_from_pcm16(self, pcm16_bytes: bytes, **kwargs: Any) -> list[float]:
+            self.calls += 1
+            return _basis_vec(self.calls)
+
+    take = _make_pcm16(3000, 3)
+    with pytest.raises(SpeakerEnrollmentError) as error:
+        enroll_pharmacist_pcm16(take * 3, client=Client(), sample_frames=[48000] * 3)
+    assert error.value.code == "ENROLLMENT_INCONSISTENT"
+    with pytest.raises(SpeakerEnrollmentError) as error:
+        enroll_pharmacist_pcm16(_make_pcm16(32767, 3), client=Client())
+    assert error.value.code == "ENROLLMENT_CLIPPED"
+    with pytest.raises(SpeakerEnrollmentError) as error:
+        enroll_pharmacist_pcm16(take, client=Client(), sample_frames=[16000, 32000])
+    assert error.value.code == "ENROLLMENT_INSUFFICIENT_SPEECH"

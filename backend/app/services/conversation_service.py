@@ -115,7 +115,7 @@ class BackendAudioPcmRingBuffer:
             if e_frame > s_frame:
                 parts.append(chunk.pcm16_bytes[s_frame * frame_bytes : e_frame * frame_bytes])
                 covered += overlap_end - overlap_start
-        if not parts or covered < (end_sec - start_sec) * 0.5:
+        if not parts or covered < end_sec - start_sec - 1e-6:
             return None
         return (b"".join(parts), channels, sample_rate)
 
@@ -518,7 +518,69 @@ class ConversationTranscriptState:
             return False
         duration = max(0.0, event.end_sec - event.start_sec)
         min_sec = SpeakerMatchThresholds.from_settings().min_embed_sec
-        return duration >= min_sec
+        return (
+            duration >= min_sec
+            or duration + sum(s.end_sec - s.start_sec for s in self._pending_short_segments(event))
+            >= min_sec
+        )
+
+    def speaker_embedding_interval(self, event: DeepgramTranscriptInput) -> tuple[float, float]:
+        """近接した短発話を蓄積できる場合は、再照合対象全体の区間を返す。"""
+        pending = self._pending_short_segments(event)
+        return (pending[0].start_sec if pending else event.start_sec, event.end_sec)
+
+    def _pending_short_segments(
+        self, event: DeepgramTranscriptInput
+    ) -> list[TranscriptSegmentModel]:
+        """同一マイク優位・近接・非重畳の未確定話者だけを短発話の蓄積候補にする。"""
+        thresholds = SpeakerMatchThresholds.from_settings()
+        if not event.is_final or event.end_sec - event.start_sec >= thresholds.min_embed_sec:
+            return []
+        channel = event.channel_index
+        if channel not in {0, 1}:
+            return []
+
+        def dominant(start: float, end: float) -> bool:
+            levels = self._audio_history.levels_for(start, end)
+            return (
+                levels[channel] >= thresholds.min_active_rms
+                and levels[channel] >= levels[1 - channel] * thresholds.rms_dominance_ratio
+            )
+
+        if not dominant(event.start_sec, event.end_sec):
+            return []
+        pending: list[TranscriptSegmentModel] = []
+        next_start = event.start_sec
+        finals = [
+            s
+            for s in self._segments
+            if s.stream_id == self._current_stream_id and s.status != "interim"
+        ]
+        for seg in reversed(finals):
+            if seg.end_sec > next_start:
+                if seg.channel_index != channel and seg.start_sec < event.end_sec:
+                    break
+                continue
+            if (
+                seg.channel_index != channel
+                or seg.speaker_role != "unknown"
+                or seg.end_sec - seg.start_sec >= thresholds.min_embed_sec
+                or not 0 <= next_start - seg.end_sec <= 0.35
+                or not dominant(seg.start_sec, seg.end_sec)
+            ):
+                break
+            if any(
+                s.channel_index != channel
+                and s.start_sec < event.end_sec
+                and s.end_sec > seg.start_sec
+                for s in finals
+            ):
+                break
+            pending.insert(0, seg)
+            next_start = seg.start_sec
+            if len(pending) >= 4:
+                break
+        return pending
 
     def slice_pcm16(self, start_sec: float, end_sec: float) -> tuple[bytes, int, int] | None:
         """指定区間の 2ch/1ch PCM16 音声をリングバッファから取得する。"""
@@ -579,11 +641,17 @@ class ConversationTranscriptState:
         target_stream = stream_id or self._current_stream_id or self.start_stream()
         channel: int = 1 if event.channel_index == 1 else 0
         speaker_role, speaker_label = SPEAKER_ROLE_BY_CHANNEL[channel]
+        if not single_stream_diarized and self._speaker_tracker.voiceprint_requested:
+            # 声紋判定前の途中結果や登録拒否後に、マイク番号由来の誤った話者名を出さない
+            speaker_role = "unknown"
+            speaker_label = SPEAKER_LABEL_BY_ROLE["unknown"]
         # 1ch ミックスモードでは同一ストリーム内で話者が切り替わってもゴースト interim を残さない
         interim_key = (target_stream, 0 if single_stream_diarized else channel)
         active_interim_id = self._active_interim_ids.get(interim_key)
         levels = (0.0, 0.0)
         voiceprint_active = self._speaker_tracker.has_pharmacist_profile
+        pending_short = self._pending_short_segments(event) if not single_stream_diarized else []
+        matched_embedding = False
 
         removed_segments: list[TranscriptSegmentModel] = []
         if event.is_final and not single_stream_diarized:
@@ -592,13 +660,19 @@ class ConversationTranscriptState:
             if voiceprint_active:
                 decision = self._speaker_tracker.verify_segment(
                     channel_index=channel,
-                    duration_sec=max(0.0, event.end_sec - event.start_sec),
+                    duration_sec=max(0.0, event.end_sec - event.start_sec)
+                    + (
+                        sum(s.end_sec - s.start_sec for s in pending_short)
+                        if segment_embedding is not None
+                        else 0.0
+                    ),
                     channel_levels=levels,
                     segment_embedding=segment_embedding,
                     noise_floor=noise_floor,
                 )
                 speaker_role = decision.speaker_role
                 speaker_label = decision.speaker_label
+                matched_embedding = decision.used_embedding
 
                 suppress_incoming, evict_indices = self._evaluate_voiceprint_channel_duplicates(
                     target_stream=target_stream,
@@ -702,12 +776,13 @@ class ConversationTranscriptState:
             event.is_final
             and not single_stream_diarized
             and voiceprint_active
+            and matched_embedding
             and speaker_role in {"pharmacist", "patient"}
         ):
             refined = self._refine_preceding_unknown_short_segments(
                 target_stream=target_stream,
                 anchor=result_segment,
-                anchor_levels=levels,
+                candidates=pending_short,
             )
 
         return TranscriptApplyOutcome(
@@ -820,44 +895,27 @@ class ConversationTranscriptState:
         *,
         target_stream: str,
         anchor: TranscriptSegmentModel,
-        anchor_levels: tuple[float, float],
+        candidates: list[TranscriptSegmentModel],
     ) -> tuple[TranscriptSegmentModel, ...]:
-        """確定した直後の同一チャンネル発話を手がかりに、直前の短い unknown 発話を再判定する。"""
-        other_ch = 1 if anchor.channel_index == 0 else 0
-        if anchor_levels[anchor.channel_index] <= anchor_levels[other_ch] * 1.2:
-            return ()
-
-        min_embed = SpeakerMatchThresholds.from_settings().min_embed_sec
-        anchor_idx = self._segment_index_by_key.get((target_stream, anchor.segment_id))
-        if anchor_idx is None or anchor_idx == 0:
-            return ()
-
-        prev = self._segments[anchor_idx - 1]
-        if (
-            prev.stream_id != target_stream
-            or prev.status != "final"
-            or prev.speaker_role != "unknown"
-            or prev.channel_index != anchor.channel_index
-        ):
-            return ()
-
-        prev_dur = max(0.0, prev.end_sec - prev.start_sec)
-        gap = anchor.start_sec - prev.end_sec
-        if prev_dur >= min_embed or gap < -0.2 or gap > 1.5:
-            return ()
-
-        self.transcript_revision += 1
-        updated = prev.model_copy(
-            update={
-                "segment_revision": prev.segment_revision + 1,
-                "transcript_revision": self.transcript_revision,
-                "speaker_role": anchor.speaker_role,
-                "speaker_label": SPEAKER_LABEL_BY_ROLE[anchor.speaker_role],
-                "status": "refined",
-            }
-        )
-        self._segments[anchor_idx - 1] = updated
-        return (updated,)
+        """蓄積音声の声紋照合が成功した短発話だけを訂正する。"""
+        refined: list[TranscriptSegmentModel] = []
+        for prev in candidates:
+            idx = self._segment_index_by_key.get((target_stream, prev.segment_id))
+            if idx is None:
+                continue
+            self.transcript_revision += 1
+            updated = prev.model_copy(
+                update={
+                    "segment_revision": prev.segment_revision + 1,
+                    "transcript_revision": self.transcript_revision,
+                    "speaker_role": anchor.speaker_role,
+                    "speaker_label": SPEAKER_LABEL_BY_ROLE[anchor.speaker_role],
+                    "status": "refined",
+                }
+            )
+            self._segments[idx] = updated
+            refined.append(updated)
+        return tuple(refined)
 
     def _sort_segments_preserving_audio_order(self) -> None:
         def _sort_key(segment: TranscriptSegmentModel) -> tuple[int, float, int]:
