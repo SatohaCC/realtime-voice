@@ -1,0 +1,106 @@
+import * as stylex from "@stylexjs/stylex";
+import { tokens } from "../../styles/tokens.stylex";
+
+export const transcriptFeedStyles = stylex.create({
+  root: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "1rem",
+    minWidth: 0,
+  },
+  header: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "0.75rem",
+  },
+  titleGroup: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.75rem",
+    flexWrap: "wrap",
+  },
+  title: {
+    fontSize: "1.0625rem",
+    lineHeight: "1.5rem",
+    fontWeight: 600,
+    color: tokens.onSurface,
+  },
+  empty: {
+    paddingBlock: "2.5rem",
+    paddingInline: "1.5rem",
+    borderRadius: tokens.cornerLarge,
+    borderWidth: "1px",
+    borderStyle: "dashed",
+    borderColor: tokens.outlineVariant,
+    backgroundColor: tokens.surfaceContainer,
+    color: tokens.onSurfaceVariant,
+    fontSize: "0.875rem",
+    textAlign: "center",
+    lineHeight: 1.7,
+  },
+  list: {
+    listStyle: "none",
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.75rem",
+    maxHeight: "24rem",
+    overflowY: "auto",
+    paddingRight: "0.25rem",
+  },
+  item: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.5rem",
+    padding: "1rem 1.125rem",
+  },
+  itemInterim: {
+    backgroundColor: tokens.surfaceContainer,
+    borderStyle: "dashed",
+  },
+  itemMeta: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "0.5rem",
+  },
+  speakerGroup: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "0.5rem",
+  },
+  speakerTag: {
+    display: "inline-flex",
+    alignItems: "center",
+    paddingBlock: "0.2rem",
+    paddingInline: "0.625rem",
+    borderRadius: tokens.cornerFull,
+    fontSize: "0.75rem",
+    lineHeight: "1rem",
+    fontWeight: 600,
+  },
+  speakerPrimary: {
+    backgroundColor: tokens.primaryContainer,
+    color: tokens.onPrimaryContainer,
+  },
+  speakerSecondary: {
+    backgroundColor: tokens.tertiaryContainer,
+    color: tokens.onTertiaryContainer,
+  },
+  timeLabel: {
+    fontSize: "0.75rem",
+    color: tokens.onSurfaceVariant,
+    fontVariantNumeric: "tabular-nums",
+  },
+  text: {
+    fontSize: "0.9375rem",
+    lineHeight: 1.65,
+    color: tokens.onSurface,
+    overflowWrap: "anywhere",
+  },
+  textInterim: {
+    color: tokens.onSurfaceVariant,
+  },
+});

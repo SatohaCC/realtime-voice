@@ -33,6 +33,22 @@ pnpm dev
 
 Backend の `CORS_ORIGINS` は、許可する Origin をカンマ区切りで指定するプロセス環境変数です。既定値は `http://localhost:3000` と `http://127.0.0.1:3000` です。
 
+### 環境変数（認証・文字起こし）
+
+ローカル開発時はルートに `.env`（Backend 参照）および `frontend/.env.local`（Frontend 参照）を配置し、実値や秘密情報はコミットしないでください。
+
+- **Frontend（`frontend/.env.local` 等）**:
+  - `NEXT_PUBLIC_SUPABASE_URL`: Supabase プロジェクト URL
+  - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: Supabase Publishable Key（従来の anon key。Service Role / Secret Key は設定しない）
+  - `APP_PUBLIC_URL`（任意）: OAuth コールバック後のリダイレクト先 Origin を固定するための信頼済み公開 URL（ローカル開発時は省略可、例: `http://localhost:3000`）
+- **Backend（`.env` 等）**:
+  - `DEEPGRAM_KEY`: Deepgram API キー（Backend のみに置き、ブラウザへは公開しない）
+  - `SUPABASE_URL`: JWT / JWKS 検証対象の Supabase プロジェクト URL（ES256 / RS256 の非対称鍵を前提）
+  - `SUPABASE_JWT_AUDIENCE`: 既定値 `authenticated`
+  - `CORS_ORIGINS` / `WS_ALLOWED_ORIGINS`: 許可するフロントエンド Origin（カンマ区切り）
+  - `TRANSCRIPTION_MAX_SESSION_SECONDS`: 1 回の文字起こし WebSocket セッション上限（既定 `240` 秒。Vercel 実行時間上限より短く設定）
+  - `SOAP_LLM_PROVIDER` / `SOAP_LLM_MODEL` / `SOAP_LLM_TIMEOUT_SECONDS`: リアルタイム SOAP 生成に使う LLM プロバイダー設定（既定は外部通信なしの `fake`。`langchain` 等の実プロバイダー連携は別途依存追加の上で指定）
+
 ## 構成
 
 - `frontend/src/app/`: App Router、レイアウト、ページ

@@ -12,11 +12,37 @@ const items = [
 describe("Tabs", () => {
   const getAnimations = Element.prototype.getAnimations;
   beforeAll(() => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    );
     // jsdomにないWeb Animations APIを、アニメーションなしのブラウザとして補う。
     Element.prototype.getAnimations = () => [];
   });
   afterAll(() => {
+    vi.unstubAllGlobals();
     Element.prototype.getAnimations = getAnimations;
+  });
+  it("アイコンを読み上げから除き、バッジの意味をタブ名に含める", () => {
+    render(
+      <Tabs
+        aria-label="表示内容"
+        items={[
+          {
+            ...items[0],
+            icon: <svg aria-hidden="true" data-testid="tab-icon" />,
+            badge: { count: 3, label: "未読3件" },
+          },
+          items[1],
+        ]}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: "概要 未読3件" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("img", { name: "未読3件" })).toHaveTextContent("3");
+    expect(screen.getByTestId("tab-icon").parentElement).toHaveAttribute("aria-hidden", "true");
   });
   it("タブとパネルを関連付け、クリックで内容を切り替える", async () => {
     const user = userEvent.setup();

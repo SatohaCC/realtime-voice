@@ -3,7 +3,9 @@ import { expect, test } from "@playwright/test";
 test("トップページでバックエンドのヘルスステータスを表示・更新できる", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "Realtime Voice" })).toBeVisible();
+  await expect(
+    page.getByRole("banner").getByRole("link", { name: "Realtime Voice" }),
+  ).toBeVisible();
   await expect(page.getByText("Backend API")).toBeVisible();
   await expect(page.getByText("ok (realtime-voice-backend)")).toBeVisible();
 
@@ -17,7 +19,9 @@ test("狭い画面とダークテーマでも内容が収まり、モーショ�
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Realtime Voice" })).toBeVisible();
+  await expect(
+    page.getByRole("banner").getByRole("link", { name: "Realtime Voice" }),
+  ).toBeVisible();
   await expect(page.locator("main")).toHaveCSS("padding-left", "20px");
   await expect(page.getByRole("button", { name: "Refresh Status", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(

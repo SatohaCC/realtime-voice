@@ -45,13 +45,17 @@ Referenceの色を置き換え、System / Componentの対応は維持する。to
 
 Badgeは任意のステータス文言を表示する製品用ラベルであり、M3の通知件数用Badgeの厳密な再現とは区別する。ボタンの標準タッチ領域は48px、smは44pxの製品設定。プレス時の角丸変更は製品側の意匠であり、rippleやspringの代替実装を名乗らない。
 
+## ヘッダー・選択入力の補足
+
+サイトヘッダーは製品独自の半透明表現を保つ。840px未満ではメニューを使い、ブランド名は必要時に省略する。開閉ボタンの後にナビゲーションを置き、Tab・Escape・領域外へのフォーカス移動に対応する。Selectは独自のコンパクトな選択入力であり、M3のExposed dropdown fieldの寸法・フローティングラベルの完全再現ではない。枠線はStyleXで幅・種類・色を個別指定する。
+
 ## 確認方法
 
 ### Tabs
 
-`shared/ui/tabs/Tabs`はラベル・パネル・選択値をPropsで受け取り、`@ui-sdk/react/tabs`でARIAの関連付けとキーボード操作を提供する。Primaryはラベル幅の3px下線、Secondaryはタブ全幅の2px下線。高さ48pxと色の対応はMaterial Web v0.192を基準にし、医療向けの既存Systemトークンを使用する。State Layerは既存部品と同じhover 8%、focus/press 10%の採用基準を維持する。選択インジケーターは即時に切り替え、独自のspring表現は追加しない。
+`shared/ui/tabs/Tabs`はラベル・パネル・選択値をPropsで受け取り、`@ui-sdk/react/tabs`でARIAの関連付けとキーボード操作を提供する。Primaryはラベル幅の3px下線、Secondaryはタブ全幅の2px下線。高さ48pxと色の対応はMaterial Web v0.192を基準にし、医療向けの既存Systemトークンを使用する。State Layerは既存部品と同じhover 8%、focus/press 10%の採用基準を維持する。Primaryのアイコン付きはAndroidの説明に合わせて高さ72pxとし、通知件数・ドットバッジはerror/on-errorロールと読み上げ名を持つ。選択インジケーターはAndroidのElasticTabIndicatorInterpolatorを参照し、左右の端をsine/cosineで別々に補間する。Web Animations APIで17点・250msの近似とし、springの完全再現とは呼ばない。モーション低減時は即座に確定し、連続操作・リサイズでは現在位置と実測幅へ追従する。
 
-通常・無効・手動選択・制御された選択・横スクロールを`Tabs.stories.tsx`で確認できる。無効タブはヘッドレスUIの契約に従いフォーカス可能だが選択できない。ラベルは文字列を必須とし、アイコンのみのタブやルーティングは今回の対象に含めない。狭い画面ではタブ列の内側を横スクロールする。
+通常・無効・手動選択・制御された選択・横スクロールを`Tabs.stories.tsx`で確認できる。無効タブはヘッドレスUIの契約に従いフォーカス可能だが選択できない。ラベルは文字列を必須とし、アイコンとバッジは任意。Primaryのアイコン・ラベル配置とSecondaryのラベル配置を分け、アイコンのみのタブやルーティングは対象に含めない。狭い画面ではタブ列の内側を横スクロールする。
 
 参照: [Material Web Tabs](https://github.com/material-components/material-web/blob/main/docs/components/tabs.md)、[Primary v0.192](https://github.com/material-components/material-web/blob/main/tokens/versions/v0_192/_md-comp-primary-navigation-tab.scss)、[Secondary v0.192](https://github.com/material-components/material-web/blob/main/tokens/versions/v0_192/_md-comp-secondary-navigation-tab.scss)。
 
@@ -67,3 +71,5 @@ Badgeは任意のステータス文言を表示する製品用ラベルであり
 - [Typography](https://m3.material.io/styles/typography/overview)
 - [Motion physics system](https://m3.material.io/styles/motion/overview/how-it-works)
 - [WCAG contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)
+
+タブ拡張の参照: [Android Tabs](https://github.com/material-components/material-components-android/blob/master/docs/components/Tabs.md)、[Elastic indicator](https://github.com/material-components/material-components-android/blob/master/lib/java/com/google/android/material/tabs/ElasticTabIndicatorInterpolator.java)。

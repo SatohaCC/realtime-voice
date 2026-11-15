@@ -1,41 +1,28 @@
 import * as stylex from "@stylexjs/stylex";
+import Link from "next/link";
 import { HealthStatusContainer } from "@/features/health/HealthStatusContainer";
+import { Card } from "@/shared/ui/card/Card";
 import { pageStyles as s } from "./page.styles";
 
 export default function HomePage() {
   return (
-    <main {...stylex.props(s.page)}>
-      <header {...stylex.props(s.header)}>
-        <div {...stylex.props(s.brand)}>
-          <span {...stylex.props(s.mark)} aria-hidden="true">
-            v
-          </span>
-          <h1 {...stylex.props(s.name)}>Realtime Voice</h1>
-        </div>
-        <nav aria-label="ページ内ナビゲーション" {...stylex.props(s.navigation)}>
-          <a href="#colors" {...stylex.props(s.link)}>
-            カラー
-          </a>
-          <a href="#connection" {...stylex.props(s.link)}>
-            接続状態
-          </a>
-        </nav>
-      </header>
+    <main id="main-content" tabIndex={-1} {...stylex.props(s.page)}>
       <section aria-labelledby="intro-title" {...stylex.props(s.hero)}>
         <div {...stylex.props(s.introduction)}>
           <p {...stylex.props(s.eyebrow)}>A little voice. A new possibility.</p>
-          <h2 id="intro-title" {...stylex.props(s.headline)}>
+          <h1 id="intro-title" {...stylex.props(s.headline)}>
             声から、
             <br />
             次の体験へ。
-          </h2>
+          </h1>
           <p {...stylex.props(s.description)}>
             アイデアを、心地よく使えるかたちに。
             <br />
             表情のあるデザインと、小さく確かな土台から。
           </p>
           <a href="#connection" {...stylex.props(s.heroLink)}>
-            接続状態を確認 <span aria-hidden="true">↗</span>
+            <span {...stylex.props(s.heroLinkLabel)}>接続状態を確認</span>
+            <span aria-hidden="true">↗</span>
           </a>
         </div>
         <div {...stylex.props(s.art)} aria-hidden="true">
@@ -49,6 +36,22 @@ export default function HomePage() {
           <span {...stylex.props(s.artCaption)}>DESIGNED TO FEEL A LITTLE MORE HUMAN</span>
         </div>
       </section>
+      <section id="audio" aria-labelledby="audio-title" {...stylex.props(s.section)}>
+        <div {...stylex.props(s.sectionHeader)}>
+          <h2 id="audio-title" {...stylex.props(s.sectionTitle)}>
+            リアルタイム文字起こし
+          </h2>
+          <p {...stylex.props(s.muted)}>AudioWorklet · Deepgram Nova-3</p>
+        </div>
+        <Card variant="outlined" style={s.panel}>
+          <p {...stylex.props(s.panelDescription)}>
+            1本または2本のマイク音声を話者分離し、リアルタイム文字起こしを行う専用ワークスペースです（利用にはログインが必要です）。
+          </p>
+          <Link href="/transcription" {...stylex.props(s.ctaLink)}>
+            文字起こし画面へ <span aria-hidden="true">↗</span>
+          </Link>
+        </Card>
+      </section>
       <section id="connection" aria-labelledby="connection-title" {...stylex.props(s.section)}>
         <div {...stylex.props(s.sectionHeader)}>
           <h2 id="connection-title" {...stylex.props(s.sectionTitle)}>
@@ -56,12 +59,12 @@ export default function HomePage() {
           </h2>
           <p {...stylex.props(s.muted)}>Live connection</p>
         </div>
-        <div {...stylex.props(s.panel)}>
+        <Card variant="outlined" style={s.panel}>
           <p {...stylex.props(s.panelDescription)}>
             画面からAPIまで、いつでも確かめられる接続状態。
           </p>
           <HealthStatusContainer />
-        </div>
+        </Card>
       </section>
       <section id="colors" aria-labelledby="palette-title" {...stylex.props(s.section)}>
         <div {...stylex.props(s.sectionHeader)}>

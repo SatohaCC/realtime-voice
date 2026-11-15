@@ -3,7 +3,7 @@ import type { StorybookConfig } from "@storybook/nextjs-vite";
 import { stylexVitePlugin } from "../config/stylexVitePlugin.ts";
 
 const config: StorybookConfig = {
-  stories: ["../src/shared/**/*.stories.@(ts|tsx)"],
+  stories: ["../src/shared/**/*.stories.@(ts|tsx)", "../src/features/**/*.stories.@(ts|tsx)"],
   framework: {
     name: "@storybook/nextjs-vite",
     options: {},

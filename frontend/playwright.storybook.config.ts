@@ -3,6 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./storybook-tests",
   outputDir: "../.cache/playwright-storybook-results",
+  // Python http.server はシングルスレッドのため、並列接続での拒否やフォーカス競合を防ぐ
+  workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
   reporter: "list",
