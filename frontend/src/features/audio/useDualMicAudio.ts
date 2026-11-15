@@ -4,10 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type AudioCaptureFrame,
   type AudioInputDeviceInfo,
+  type CaptureDevices,
   createDualMicCapture,
   type DualMicCaptureSession,
   detectSpeakingChannels,
   listAudioInputDevices,
+  resolveCaptureDevices,
 } from "@/shared/lib/audio/dualMicCapture";
 
 export type MicCaptureMode = "single" | "dual";
@@ -133,51 +135,70 @@ export function useDualMicAudio(options?: UseDualMicAudioOptions) {
     [mic1DeviceId, mode],
   );
 
-  const startCapture = useCallback(async () => {
-    if (captureRunRef.current) return false;
-    if (mode === "dual" && mic1DeviceId && mic2DeviceId && mic1DeviceId === mic2DeviceId) {
-      setError("マイク 1（薬剤師）とマイク 2（患者）に同じデバイスは指定できません。");
-      return false;
-    }
-    const controller = new AbortController();
-    captureRunRef.current = controller;
-    setError(null);
-    setFrameCount(0);
+  const prepareCapture = useCallback(
+    async (signal?: AbortSignal) => {
+      const selection = await resolveCaptureDevices(
+        { mic1DeviceId, mic2DeviceId },
+        mode === "dual" ? 2 : 1,
+        signal,
+      );
+      signal?.throwIfAborted();
+      setMic1DeviceId(selection.mic1DeviceId);
+      setMic2DeviceId(selection.mic2DeviceId ?? "");
+      void refreshDevices();
+      return selection;
+    },
+    [mic1DeviceId, mic2DeviceId, mode, refreshDevices],
+  );
 
-    try {
-      const session = await createDualMicCapture({
-        signal: controller.signal,
-        mic1DeviceId,
-        mic2DeviceId: mode === "dual" ? mic2DeviceId : undefined,
-        onAudioFrame: (frame) => {
-          if (captureRunRef.current !== controller) return;
-          setLevels(frame.levels);
-          setFrameCount((count) => count + 1);
-          onAudioFrameRef.current?.(frame);
-        },
-        onError: (captureError) => {
-          if (captureRunRef.current !== controller) return;
-          setError(captureError.message);
-          void stopCapture();
-        },
-      });
-      if (captureRunRef.current !== controller || controller.signal.aborted) {
-        await session.stop();
+  const startCapture = useCallback(
+    async (selection?: CaptureDevices) => {
+      if (captureRunRef.current) return false;
+      if (mode === "dual" && mic1DeviceId && mic2DeviceId && mic1DeviceId === mic2DeviceId) {
+        setError("マイク 1（薬剤師）とマイク 2（患者）に同じデバイスは指定できません。");
         return false;
       }
-      sessionRef.current = session;
-      setIsCapturing(true);
-      // 権限付与後に実デバイス名を取得するため一覧を再同期する
-      void refreshDevices();
-      return true;
-    } catch (err) {
-      if (captureRunRef.current !== controller) return false;
-      captureRunRef.current = null;
-      setError(err instanceof Error ? err.message : "マイクの収音を開始できませんでした。");
-      setIsCapturing(false);
-      return false;
-    }
-  }, [mic1DeviceId, mic2DeviceId, mode, refreshDevices, stopCapture]);
+      const controller = new AbortController();
+      captureRunRef.current = controller;
+      setError(null);
+      setFrameCount(0);
+
+      try {
+        const resolved = selection ?? (await prepareCapture(controller.signal));
+        const session = await createDualMicCapture({
+          signal: controller.signal,
+          ...resolved,
+          onAudioFrame: (frame) => {
+            if (captureRunRef.current !== controller) return;
+            setLevels(frame.levels);
+            setFrameCount((count) => count + 1);
+            onAudioFrameRef.current?.(frame);
+          },
+          onError: (captureError) => {
+            if (captureRunRef.current !== controller) return;
+            setError(captureError.message);
+            void stopCapture();
+          },
+        });
+        if (captureRunRef.current !== controller || controller.signal.aborted) {
+          await session.stop();
+          return false;
+        }
+        sessionRef.current = session;
+        setIsCapturing(true);
+        // 権限付与後に実デバイス名を取得するため一覧を再同期する
+        void refreshDevices();
+        return true;
+      } catch (err) {
+        if (captureRunRef.current !== controller) return false;
+        captureRunRef.current = null;
+        setError(err instanceof Error ? err.message : "マイクの収音を開始できませんでした。");
+        setIsCapturing(false);
+        return false;
+      }
+    },
+    [mic1DeviceId, mic2DeviceId, mode, prepareCapture, refreshDevices, stopCapture],
+  );
 
   const toggleCapture = useCallback(() => {
     if (isCapturing) {
@@ -206,6 +227,7 @@ export function useDualMicAudio(options?: UseDualMicAudioOptions) {
     frameCount,
     error,
     refreshDevices,
+    prepareCapture,
     startCapture,
     stopCapture,
     toggleCapture,

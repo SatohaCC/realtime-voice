@@ -64,7 +64,19 @@ describe("WorkspaceControlBar", () => {
         onModeChange={onModeChange}
         devices={[{ deviceId: "d1", label: "Mic 1" }]}
         emptyDeviceLabel="なし"
-        channels={[]}
+        channels={[
+          {
+            id: "mic1",
+            label: "マイク1",
+            selectedDeviceId: "d1",
+            deviceSelectLabel: "デバイス1",
+            levelLabel: "音量1",
+            level: 0,
+            isSpeaking: false,
+            speakingLabel: "発話中",
+            idleLabel: "無音",
+          },
+        ]}
         onDeviceChange={() => {}}
         onRefreshDevices={() => {}}
         refreshDevicesLabel="デバイス再取得"
@@ -82,6 +94,8 @@ describe("WorkspaceControlBar", () => {
 
     const singleRadio = screen.getByRole("radio", { name: "1マイク" });
     expect(singleRadio).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "デバイス1" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "文字起こし開始" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "デバイス再取得" })).toBeEnabled();
     fireEvent.click(singleRadio);
     expect(onModeChange).toHaveBeenCalledWith("single");

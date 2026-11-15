@@ -18,6 +18,34 @@ def _evidence(seg: TranscriptSegmentModel, quote: str | None = None) -> dict[str
     }
 
 
+@pytest.mark.parametrize("index,section", [(1, "O"), (3, "P")])
+def test_fake_long_utterance_quotes_remain_literal_and_apply(index: int, section: str) -> None:
+    async def _run() -> None:
+        conv, _ = _setup_conversation()
+        original = conv.segments[index]
+        segment = original.model_copy(
+            update={"text": original.text + " 詳細な\n状況を説明します。" * 12}
+        )
+        lookup = {(segment.stream_id, segment.segment_id): segment}
+        manager = SoapStateManager(conversation_id=conv.conversation_id)
+        outcome = await manager.run_extract_spoa(
+            llm_client=FakeSoapLlmClient(),
+            new_segments=[segment],
+            segments_snapshot_lookup=lookup,
+            current_segments_lookup=lookup,
+            target_processed_transcript_revision=conv.transcript_revision,
+        )
+        assert outcome.applied_operations > 0
+        items = getattr(manager.note.sections, section).items
+        assert items
+        for item in items:
+            for evidence in item.evidence:
+                assert evidence.quote == segment.text[:80].strip()
+                assert evidence.quote in segment.text
+
+    asyncio.run(_run())
+
+
 @pytest.mark.parametrize("mixed", [False, True])
 def test_invalid_quote_rejects_whole_batch_without_advancing_revision(mixed: bool) -> None:
     conv, lookup = _setup_conversation()

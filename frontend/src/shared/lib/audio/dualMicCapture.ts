@@ -26,6 +26,50 @@ export interface DualMicCaptureSession {
 
 const WORKLET_URL = "/worklets/dual-pcm-processor.js";
 
+export interface CaptureDevices {
+  mic1DeviceId: string;
+  mic2DeviceId?: string;
+}
+
+/** 未選択時は権限取得後の一覧から入力を確定し、2マイクの欠落・重複を拒否する。 */
+export async function resolveCaptureDevices(
+  selection: CaptureDevices,
+  channels: 1 | 2,
+  signal?: AbortSignal,
+): Promise<CaptureDevices> {
+  signal?.throwIfAborted();
+  if (channels === 1 || (selection.mic1DeviceId && selection.mic2DeviceId)) {
+    if (channels === 2 && selection.mic1DeviceId === selection.mic2DeviceId) {
+      throw new Error("2マイクモードでは異なる入力デバイスを選択してください。");
+    }
+    return {
+      mic1DeviceId: selection.mic1DeviceId,
+      mic2DeviceId: channels === 2 ? selection.mic2DeviceId : undefined,
+    };
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  try {
+    signal?.throwIfAborted();
+    const devices = await listAudioInputDevices();
+    signal?.throwIfAborted();
+    const first =
+      selection.mic1DeviceId ||
+      devices.find((device) => device.deviceId && device.deviceId !== selection.mic2DeviceId)
+        ?.deviceId;
+    const second =
+      selection.mic2DeviceId ||
+      devices.find((device) => device.deviceId && device.deviceId !== first)?.deviceId;
+    if (!first || !second || first === second) {
+      throw new Error(
+        "2マイクモードには異なる2つの入力デバイスが必要です。マイクを接続するか「1マイク」へ切り替えてください。",
+      );
+    }
+    return { mic1DeviceId: first, mic2DeviceId: second };
+  } finally {
+    for (const track of stream.getTracks()) track.stop();
+  }
+}
+
 /**
  * 利用可能な音声入力デバイス一覧を取得する。
  */

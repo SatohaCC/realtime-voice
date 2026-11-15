@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     hasDuplicateDevices: false,
     isCapturing: false,
     error: null,
+    prepareCapture: vi.fn(),
     startCapture: vi.fn<() => Promise<boolean>>(),
     stopCapture: vi.fn<() => Promise<void>>(),
   },
@@ -51,6 +52,7 @@ beforeEach(() => {
   mocks.authCallbacks = {};
   mocks.audio.mode = "dual";
   mocks.audio.hasDuplicateDevices = false;
+  mocks.audio.prepareCapture.mockResolvedValue({ mic1DeviceId: "mic-a", mic2DeviceId: "mic-b" });
   mocks.audio.startCapture.mockResolvedValue(true);
   mocks.audio.stopCapture.mockResolvedValue(undefined);
   mocks.getValidAccessToken.mockResolvedValue("valid-access-token");
@@ -70,6 +72,42 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const session = () => ({ sendAudio: vi.fn(), close: vi.fn(async () => {}) });
+
+it("入力デバイスの確定前に接続せず、確定した2入力で収音する", async () => {
+  const selection = deferred<{ mic1DeviceId: string; mic2DeviceId: string }>();
+  mocks.audio.prepareCapture.mockReturnValue(selection.promise);
+  mocks.connect.mockResolvedValue(session());
+  const hook = renderHook(() => useRealtimeTranscription());
+  act(() => hook.result.current.toggleTranscription());
+  await waitFor(() => expect(mocks.audio.prepareCapture).toHaveBeenCalledOnce());
+  expect(mocks.connect).not.toHaveBeenCalled();
+  const devices = { mic1DeviceId: "mic-a", mic2DeviceId: "mic-b" };
+  await act(async () => selection.resolve(devices));
+  await waitFor(() => expect(hook.result.current.isStreaming).toBe(true));
+  expect(mocks.connect.mock.calls[0][0].channels).toBe(2);
+  expect(mocks.audio.startCapture).toHaveBeenCalledWith(devices);
+});
+
+it("2入力の確定に失敗した場合は接続と収音を開始しない", async () => {
+  mocks.audio.prepareCapture.mockRejectedValue(new Error("異なる2つの入力が必要です"));
+  const hook = renderHook(() => useRealtimeTranscription());
+  act(() => hook.result.current.toggleTranscription());
+  await waitFor(() => expect(hook.result.current.error).toContain("異なる2つ"));
+  expect(mocks.connect).not.toHaveBeenCalled();
+  expect(mocks.audio.startCapture).not.toHaveBeenCalled();
+});
+
+it("入力の権限待ちで停止すると、確定後も接続しない", async () => {
+  const selection = deferred<{ mic1DeviceId: string; mic2DeviceId: string }>();
+  mocks.audio.prepareCapture.mockReturnValue(selection.promise);
+  const hook = renderHook(() => useRealtimeTranscription());
+  act(() => hook.result.current.toggleTranscription());
+  await waitFor(() => expect(mocks.audio.prepareCapture).toHaveBeenCalledOnce());
+  act(() => hook.result.current.toggleTranscription());
+  await act(async () => selection.resolve({ mic1DeviceId: "mic-a", mic2DeviceId: "mic-b" }));
+  expect(mocks.connect).not.toHaveBeenCalled();
+  expect(mocks.audio.startCapture).not.toHaveBeenCalled();
+});
 
 it.each([false, true])(
   "復元失敗時は下書きを保持して収音と更新を停止する（接続確定前: %s）",

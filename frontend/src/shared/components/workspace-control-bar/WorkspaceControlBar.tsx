@@ -140,7 +140,7 @@ export function WorkspaceControlBar({
                     options={deviceOptions}
                     value={channel.selectedDeviceId || null}
                     placeholder={emptyDeviceLabel}
-                    disabled={isCapturing || !canStart || devices.length === 0}
+                    disabled={isCapturing || !canChangeMode || devices.length === 0}
                     onValueChange={(nextValue) => {
                       if (nextValue !== null) {
                         onDeviceChange(channel.id, nextValue);

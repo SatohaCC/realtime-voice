@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/shared/lib/audio/dualMicCapture", () => ({
   createDualMicCapture: mocks.create,
   listAudioInputDevices: mocks.listDevices,
+  resolveCaptureDevices: async (selection: unknown) => selection,
   detectSpeakingChannels: () => [false, false],
 }));
 beforeEach(() => {
@@ -31,7 +32,7 @@ it.each(["stop", "unmount"])(
     );
     const hook = renderHook(() => useDualMicAudio());
     let starting: Promise<boolean> = Promise.resolve(false);
-    act(() => {
+    await act(async () => {
       starting = hook.result.current.startCapture();
     });
     const signal = mocks.create.mock.calls[0][0].signal;

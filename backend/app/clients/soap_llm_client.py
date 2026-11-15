@@ -112,7 +112,7 @@ def _extract_non_plan_operations_for_segment(
         "stream_id": str(segment.get("stream_id", "")),
         "segment_id": str(segment.get("segment_id", "")),
         "segment_revision": int(segment.get("segment_revision", 1)),
-        "quote": _normalize_summary_text(text, max_len=80),
+        "quote": text[:80],
     }
 
     is_question = bool(_QUESTION_END_RE.search(text))
@@ -235,7 +235,7 @@ class FakeSoapLlmClient:
                 "stream_id": str(segment.get("stream_id", "")),
                 "segment_id": str(segment.get("segment_id", "")),
                 "segment_revision": int(segment.get("segment_revision", 1)),
-                "quote": _normalize_summary_text(text, max_len=80),
+                "quote": text[:80],
             }
 
             if _CORRECTION_HINT_RE.search(text) and plan_text:

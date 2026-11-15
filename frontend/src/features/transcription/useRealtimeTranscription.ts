@@ -206,6 +206,8 @@ export function useRealtimeTranscription({
         return;
       }
 
+      const captureDevices = await audio.prepareCapture(run.controller.signal);
+      if (runRef.current !== run || run.controller.signal.aborted) return;
       const session = await createDeepgramStreamSession({
         accessToken,
         channels: enableSoap ? 2 : 1,
@@ -258,7 +260,7 @@ export function useRealtimeTranscription({
         return;
       }
       run.session = session;
-      const started = await audio.startCapture();
+      const started = await audio.startCapture(captureDevices);
       if (runRef.current !== run || run.controller.signal.aborted) return;
       if (!started) {
         runRef.current = null;
@@ -283,6 +285,7 @@ export function useRealtimeTranscription({
   }, [
     audio.hasDuplicateDevices,
     audio.mode,
+    audio.prepareCapture,
     audio.startCapture,
     audio.stopCapture,
     conversationState,
