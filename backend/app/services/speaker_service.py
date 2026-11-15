@@ -408,6 +408,7 @@ class ConversationSpeakerTracker:
         channel_levels: tuple[float, float],
         segment_embedding: Sequence[float] | None,
         noise_floor: tuple[float, float] = (0.002, 0.002),
+        mutate_patient_centroid: bool = True,
     ) -> SpeakerVerificationDecision:
         """声の類似度と 2ch 音量差を組み合わせて話者を判定する（不確かなときは unknown）。"""
         fallback_role: SpeakerRole = "patient" if channel_index == 1 else "pharmacist"
@@ -490,7 +491,8 @@ class ConversationSpeakerTracker:
         ):
             # 薬剤師と紛らわしくなく、ch1 優位の高品質区間でのみ安全に EMA 更新する
             if (
-                channel_index == 1
+                mutate_patient_centroid
+                and channel_index == 1
                 and sim_p < self._thresholds.pharmacist_low
                 and duration_sec >= self._thresholds.min_patient_init_sec
                 and self_rms >= min_signal
@@ -518,8 +520,9 @@ class ConversationSpeakerTracker:
             and self_rms >= min_signal
             and self_rms >= other_rms * self._thresholds.rms_dominance_ratio
         ):
-            self._patient_centroid = list(seg_vec)
-            self._patient_update_count += 1
+            if mutate_patient_centroid:
+                self._patient_centroid = list(seg_vec)
+                self._patient_update_count += 1
             return SpeakerVerificationDecision(
                 speaker_role="patient",
                 speaker_label=SPEAKER_LABEL_BY_ROLE["patient"],

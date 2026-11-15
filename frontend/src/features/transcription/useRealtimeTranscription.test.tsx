@@ -71,7 +71,11 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-const session = () => ({ sendAudio: vi.fn(), close: vi.fn(async () => {}) });
+const session = () => ({
+  sendAudio: vi.fn(),
+  updateSegmentSpeaker: vi.fn(),
+  close: vi.fn(async () => {}),
+});
 
 it("入力デバイスの確定前に接続せず、確定した2入力で収音する", async () => {
   const selection = deferred<{ mic1DeviceId: string; mic2DeviceId: string }>();
@@ -531,5 +535,8 @@ it("会話イベント受信・新しい会話開始・重複デバイス遮断�
   act(() => hook.result.current.toggleTranscription());
   await waitFor(() => expect(hook.result.current.isStreaming).toBe(true));
   expect(mocks.connect.mock.calls[2][0].conversationId).not.toBe(firstConversationId);
+  act(() => hook.result.current.updateSegmentSpeaker("stream-3", "seg-1", "patient"));
+  const activeSession = await mocks.connect.mock.results[2].value;
+  expect(activeSession.updateSegmentSpeaker).toHaveBeenCalledWith("stream-3", "seg-1", "patient");
   hook.unmount();
 });

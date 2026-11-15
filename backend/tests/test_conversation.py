@@ -494,3 +494,75 @@ def test_voiceprint_deduplicates_same_speaker_bleed_regardless_of_order_length_a
     patient_segments = [s for s in state.finalized_segments if s.text == "はい大丈夫です"]
     assert len(patient_segments) == 1
     assert patient_segments[0].speaker_role == "patient"
+
+
+def test_word_clause_split_and_manual_speaker_override_protection() -> None:
+    from app.services.conversation_service import (
+        DeepgramWordTiming,
+        build_word_clause_candidates,
+        join_deepgram_words,
+    )
+    from app.services.speaker_service import normalize_embedding
+
+    words = [
+        DeepgramWordTiming("今日", 0.1, 0.4, 0.95),
+        DeepgramWordTiming("は", 0.4, 0.6, 0.95),
+        DeepgramWordTiming("どうですか。", 0.6, 1.2, 0.95),
+        DeepgramWordTiming("昨日", 1.7, 2.0, 0.93),
+        DeepgramWordTiming("から", 2.0, 2.3, 0.93),
+        DeepgramWordTiming("痛みます。", 2.3, 3.0, 0.93),
+    ]
+    clauses = build_word_clause_candidates(words, min_chunk_sec=0.9)
+    assert len(clauses) == 2
+    assert join_deepgram_words(clauses[0]) == "今日はどうですか。"
+    assert join_deepgram_words(clauses[1]) == "昨日から痛みます。"
+
+    pharm_vec = normalize_embedding([1.0] + [0.0] * 31)
+    patient_vec = normalize_embedding([0.0, 1.0] + [0.0] * 30)
+    assert pharm_vec is not None
+    assert patient_vec is not None
+
+    state = ConversationTranscriptState(conversation_id="conv-manual")
+    state.start_stream("s1")
+    assert state.set_pharmacist_profile(
+        model_id="3dspeaker_campplus_zh_en_16k_contiguous_v2", embedding=pharm_vec
+    )[0]
+    state.append_pcm16(
+        _make_stereo_pcm16(left_amp=400, right_amp=4500, samples_per_channel=48000),
+        channels=2,
+        sample_rate=16000,
+    )
+
+    short_res = state.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "はい", True, True, 0.1, 0.4, 0.9),
+        segment_embedding=None,
+    )
+    assert short_res.segment is not None
+    assert short_res.segment.speaker_role == "unknown"
+
+    # 手動で unknown に確定保護したあとは、後続の自動蓄積再判定で上書きされない
+    # まず patient へ手動変更 → 再び unknown へ手動訂正
+    moved = state.override_segment_speaker(
+        stream_id="s1",
+        segment_id=short_res.segment.segment_id,
+        speaker_role="patient",
+    )
+    assert moved is not None
+    assert moved.speaker_role == "patient"
+    assert moved.speaker_label == "患者"
+    assert moved.status == "refined"
+    assert moved.segment_revision == 2
+
+    back = state.override_segment_speaker(
+        stream_id="s1",
+        segment_id=short_res.segment.segment_id,
+        speaker_role="unknown",
+    )
+    assert back is not None
+    assert back.speaker_role == "unknown"
+
+    next_res = state.apply_deepgram_event(
+        DeepgramTranscriptInput(1, "大丈夫です", True, True, 0.5, 0.85, 0.95),
+        segment_embedding=patient_vec,
+    )
+    assert all(s.segment_id != short_res.segment.segment_id for s in next_res.refined_segments)

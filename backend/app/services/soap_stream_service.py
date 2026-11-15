@@ -31,14 +31,22 @@ from app.schemas.soap import (
     SoapLifecycleStatus,
     SoapStatusEvent,
     SoapUpdatedEvent,
+    SpeakerRole,
     TranscriptUpdatedEvent,
 )
-from app.schemas.speaker import SpeakerProfileAckEvent, SpeakerProfileFrame
+from app.schemas.speaker import (
+    SegmentSpeakerOverrideFrame,
+    SpeakerProfileAckEvent,
+    SpeakerProfileFrame,
+)
 from app.schemas.transcription import TranscriptionErrorEvent, TranscriptionStreamConfig
 from app.services.audio_vad_service import AudioActivityGate, AudioGateConfig
 from app.services.conversation_service import (
     ConversationTranscriptState,
     DeepgramTranscriptInput,
+    DeepgramWordTiming,
+    build_word_clause_candidates,
+    join_deepgram_words,
 )
 from app.services.soap_service import SoapStateManager
 from app.services.speaker_audio_service import select_speaker_audio
@@ -180,6 +188,40 @@ def get_default_conversation_registry() -> ConversationSessionRegistry:
     return _DEFAULT_REGISTRY
 
 
+def _parse_deepgram_word_timings(alt0: dict[object, object]) -> tuple[DeepgramWordTiming, ...]:
+    raw_words = alt0.get("words")
+    if not isinstance(raw_words, list):
+        return ()
+    words: list[DeepgramWordTiming] = []
+    for item in raw_words:
+        if not isinstance(item, dict):
+            continue
+        word_text = str(item.get("punctuated_word") or item.get("word") or "").strip()
+        raw_w_start = item.get("start")
+        raw_w_end = item.get("end")
+        raw_w_conf = item.get("confidence")
+        if (
+            not word_text
+            or not isinstance(raw_w_start, int | float)
+            or not isinstance(raw_w_end, int | float)
+        ):
+            continue
+        w_start = max(0.0, float(raw_w_start))
+        w_end = max(w_start, float(raw_w_end))
+        if w_end <= w_start:
+            continue
+        w_conf = float(raw_w_conf) if isinstance(raw_w_conf, int | float) else 0.0
+        words.append(
+            DeepgramWordTiming(
+                text=word_text,
+                start_sec=w_start,
+                end_sec=w_end,
+                confidence=max(0.0, min(1.0, w_conf)),
+            )
+        )
+    return tuple(words)
+
+
 def _parse_deepgram_transcript_input(raw_text: str) -> DeepgramTranscriptInput | None:
     try:
         payload = json.loads(raw_text)
@@ -220,6 +262,7 @@ def _parse_deepgram_transcript_input(raw_text: str) -> DeepgramTranscriptInput |
         start_sec=max(0.0, start_sec),
         end_sec=max(0.0, start_sec + max(0.0, duration_sec)),
         confidence=max(0.0, min(1.0, confidence)),
+        words=_parse_deepgram_word_timings(alt0),
     )
 
 
@@ -367,6 +410,45 @@ class _SoapSessionCoordinator:
         )
         self._queue.enqueue(ack.model_dump_json(), priority="status")
 
+    def handle_segment_speaker_override(self, raw_payload: dict[str, object]) -> None:
+        """クライアント UI からの手動話者訂正を反映し、SOAP 整合・再抽出を起動する。"""
+        if not self.is_current():
+            return
+        try:
+            frame = SegmentSpeakerOverrideFrame.model_validate(raw_payload)
+        except ValidationError:
+            return
+
+        updated = self._record.transcript_state.override_segment_speaker(
+            stream_id=frame.stream_id,
+            segment_id=frame.segment_id,
+            speaker_role=frame.speaker_role,
+        )
+        if updated is None:
+            return
+
+        event = TranscriptUpdatedEvent(
+            protocol_version=self._timing.protocol_version,
+            conversation_id=self._record.conversation_id,
+            event_id=self._event_id(),
+            sequence=self._next_seq(),
+            segment=updated,
+            removed=False,
+        )
+        self._queue.enqueue(event.model_dump_json(), priority="high")
+        self._reconcile_soap_with_transcript()
+
+        if self._llm_client is not None and updated.speaker_role in {"pharmacist", "patient"}:
+            if self._pending_since is None:
+                self._pending_since = time.monotonic()
+            if self._record.pending_from_transcript_revision is None:
+                self._record.pending_from_transcript_revision = updated.transcript_revision
+            self._has_speech_final_trigger = True
+            self._record.has_unapplied_transcript = True
+            if self._record.soap_status not in {"updating", "pending"}:
+                self.enqueue_soap_status(status="pending", has_unapplied_transcript=True)
+            self._wakeup.set()
+
     def _parse_and_resolve_gate(self, raw_text: str) -> DeepgramTranscriptInput | None:
         parsed = _parse_deepgram_transcript_input(raw_text)
         if parsed is None:
@@ -379,6 +461,25 @@ class _SoapSessionCoordinator:
                     if (self._mono_mix and resolved.dominant_channel is not None)
                     else parsed.channel_index
                 )
+                offset = resolved.real_start_sec - parsed.start_sec
+                shifted_words = tuple(
+                    DeepgramWordTiming(
+                        text=w.text,
+                        start_sec=max(
+                            resolved.real_start_sec,
+                            min(resolved.real_end_sec, w.start_sec + offset),
+                        ),
+                        end_sec=max(
+                            max(
+                                resolved.real_start_sec,
+                                min(resolved.real_end_sec, w.start_sec + offset),
+                            ),
+                            min(resolved.real_end_sec, w.end_sec + offset),
+                        ),
+                        confidence=w.confidence,
+                    )
+                    for w in parsed.words
+                )
                 return DeepgramTranscriptInput(
                     channel_index=next_channel,
                     text=parsed.text,
@@ -387,20 +488,24 @@ class _SoapSessionCoordinator:
                     start_sec=resolved.real_start_sec,
                     end_sec=resolved.real_end_sec,
                     confidence=parsed.confidence,
+                    words=shifted_words,
                 )
         return parsed
 
-    def _extract_embedding_for_event(self, parsed: DeepgramTranscriptInput) -> list[float] | None:
+    def _extract_embedding_for_interval(
+        self,
+        *,
+        channel_index: int,
+        start_sec: float,
+        end_sec: float,
+    ) -> list[float] | None:
         if self._speaker_client is None or self._mono_mix:
             return None
-        if not self._record.transcript_state.needs_speaker_embedding(parsed):
-            return None
-        start_sec, end_sec = self._record.transcript_state.speaker_embedding_interval(parsed)
         sliced = self._record.transcript_state.slice_pcm16(start_sec, end_sec)
         if sliced is None:
             return None
         pcm_bytes, channels, sample_rate = sliced
-        channel_idx = 1 if parsed.channel_index == 1 and channels == 2 else 0
+        channel_idx = 1 if channel_index == 1 and channels == 2 else 0
         selected = select_speaker_audio(
             pcm_bytes, sample_rate=sample_rate, channels=channels, channel_index=channel_idx
         )
@@ -419,6 +524,93 @@ class _SoapSessionCoordinator:
         except SpeakerEmbeddingClientError:
             return None
 
+    def _extract_embedding_for_event(self, parsed: DeepgramTranscriptInput) -> list[float] | None:
+        if self._speaker_client is None or self._mono_mix:
+            return None
+        if not self._record.transcript_state.needs_speaker_embedding(parsed):
+            return None
+        start_sec, end_sec = self._record.transcript_state.speaker_embedding_interval(parsed)
+        return self._extract_embedding_for_interval(
+            channel_index=parsed.channel_index,
+            start_sec=start_sec,
+            end_sec=end_sec,
+        )
+
+    def _resolve_events_for_final(
+        self, parsed: DeepgramTranscriptInput
+    ) -> list[tuple[DeepgramTranscriptInput, list[float] | None]]:
+        """確定発話を必要に応じ words[] の話者交代境界で分割し、各区間の埋め込みと共に返す。"""
+        if self._speaker_client is None or self._mono_mix:
+            return [(parsed, None)]
+
+        if self._record.transcript_state.needs_turn_split_probe(parsed):
+            clauses = build_word_clause_candidates(
+                parsed.words,
+                min_chunk_sec=settings.speaker_min_embed_seconds,
+            )
+            if len(clauses) >= 2:
+                probed: list[
+                    tuple[tuple[DeepgramWordTiming, ...], SpeakerRole, list[float] | None]
+                ] = []
+                for clause_words in clauses:
+                    c_start = clause_words[0].start_sec
+                    c_end = clause_words[-1].end_sec
+                    emb = self._extract_embedding_for_interval(
+                        channel_index=parsed.channel_index,
+                        start_sec=c_start,
+                        end_sec=c_end,
+                    )
+                    role = self._record.transcript_state.classify_probe_segment(
+                        channel_index=parsed.channel_index,
+                        start_sec=c_start,
+                        end_sec=c_end,
+                        segment_embedding=emb,
+                    )
+                    probed.append((clause_words, role, emb))
+
+                known_roles = {role for _, role, _ in probed if role in {"pharmacist", "patient"}}
+                if len(known_roles) >= 2:
+                    merged: list[
+                        tuple[list[DeepgramWordTiming], SpeakerRole, list[float] | None]
+                    ] = []
+                    for clause_words, role, emb in probed:
+                        if merged and merged[-1][1] == role:
+                            merged[-1][0].extend(clause_words)
+                            merged[-1] = (merged[-1][0], role, None)
+                        else:
+                            merged.append((list(clause_words), role, emb))
+
+                    resolved_turns: list[tuple[DeepgramTranscriptInput, list[float] | None]] = []
+                    last_idx = len(merged) - 1
+                    for idx, (turn_words, _, cached_emb) in enumerate(merged):
+                        t_start = turn_words[0].start_sec
+                        t_end = turn_words[-1].end_sec
+                        t_conf = sum(w.confidence for w in turn_words) / len(turn_words)
+                        sub_emb = (
+                            cached_emb
+                            if cached_emb is not None
+                            else self._extract_embedding_for_interval(
+                                channel_index=parsed.channel_index,
+                                start_sec=t_start,
+                                end_sec=t_end,
+                            )
+                        )
+                        sub_input = DeepgramTranscriptInput(
+                            channel_index=parsed.channel_index,
+                            text=join_deepgram_words(turn_words),
+                            is_final=True,
+                            speech_final=parsed.speech_final if idx == last_idx else False,
+                            start_sec=t_start,
+                            end_sec=t_end,
+                            confidence=t_conf if t_conf > 0 else parsed.confidence,
+                            words=tuple(turn_words),
+                        )
+                        resolved_turns.append((sub_input, sub_emb))
+                    return resolved_turns
+
+        emb = self._extract_embedding_for_event(parsed)
+        return [(parsed, emb)]
+
     async def handle_deepgram_message_async(self, raw_text: str) -> None:
         """イベントループを塞がずに話者埋め込みを抽出し、Deepgram メッセージを反映する。"""
         if not self.is_current():
@@ -426,16 +618,18 @@ class _SoapSessionCoordinator:
         parsed = self._parse_and_resolve_gate(raw_text)
         if parsed is None:
             return
-        precomputed: list[float] | None = None
-        if (
-            self._speaker_client is not None
-            and not self._mono_mix
-            and self._record.transcript_state.needs_speaker_embedding(parsed)
-        ):
-            precomputed = await asyncio.to_thread(self._extract_embedding_for_event, parsed)
+        if self._speaker_client is not None and not self._mono_mix and parsed.is_final:
+            resolved_events = await asyncio.to_thread(self._resolve_events_for_final, parsed)
+            for sub_input, sub_emb in resolved_events:
+                self.handle_deepgram_message(
+                    raw_text,
+                    precomputed_embedding=sub_emb,
+                    resolved_input=sub_input,
+                )
+            return
         self.handle_deepgram_message(
             raw_text,
-            precomputed_embedding=precomputed,
+            precomputed_embedding=None,
             resolved_input=parsed,
         )
 
@@ -989,6 +1183,9 @@ async def relay_soap_conversation_stream(
                     continue
                 if msg_type == "SpeakerProfile":
                     coordinator.handle_speaker_profile_message(control)
+                    continue
+                if msg_type == "UpdateSegmentSpeaker":
+                    coordinator.handle_segment_speaker_override(control)
                     continue
                 if msg_type == "CloseStream":
                     await deepgram_ws.send(payload)

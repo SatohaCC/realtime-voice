@@ -125,6 +125,18 @@ export const transcriptChatStyles = stylex.create({
     color: tokens.onTertiaryContainer,
     fontWeight: 600,
   },
+  roleSelect: {
+    appearance: "auto",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: tokens.outlineVariant,
+    borderRadius: tokens.cornerSmall,
+    paddingInline: "0.45rem",
+    paddingBlock: "0.1rem",
+    fontSize: "0.75rem",
+    fontWeight: 600,
+    cursor: "pointer",
+  },
   micText: {
     fontWeight: 500,
     color: tokens.onSurfaceVariant,

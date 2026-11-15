@@ -1147,3 +1147,245 @@ def test_ws_replaces_inferior_other_channel_duplicate_with_removed_event() -> No
         assert [seg.text for seg in record.transcript_state.finalized_segments] == ["処分に"]
 
     asyncio.run(_run())
+
+
+def test_ws_splits_turn_switch_with_words_and_supports_manual_override() -> None:
+    import array
+
+    from app.services.speaker_service import normalize_embedding
+
+    pharm_vec = normalize_embedding([1.0] + [0.0] * 31)
+    patient_vec = normalize_embedding([0.0, 1.0] + [0.0] * 30)
+    assert pharm_vec is not None
+    assert patient_vec is not None
+
+    class _AmpRoutingSpeakerClient:
+        model_id = "3dspeaker_campplus_zh_en_16k_contiguous_v2"
+        embedding_dim = 32
+
+        def extract_embedding_from_pcm16(
+            self,
+            pcm16_bytes: bytes,
+            *,
+            sample_rate: int = 16000,
+            channels: int = 1,
+            channel_index: int = 0,
+        ) -> list[float] | None:
+            samples = array.array("h")
+            samples.frombytes(pcm16_bytes[: len(pcm16_bytes) - (len(pcm16_bytes) % 2)])
+            if not samples:
+                return None
+            avg_abs = sum(abs(s) for s in samples) / len(samples)
+            # ch0=4200 または ch0=5000 は薬剤師、それ以外（患者優位等）は患者ベクトル
+            assert pharm_vec is not None
+            assert patient_vec is not None
+            return list(pharm_vec if avg_abs >= 3800 else patient_vec)
+
+    # [0..2.0s]: ch1 患者が話す（患者一時重心を登録）
+    # [2.0..3.5s]: ch0 薬剤師 (amp=4500)
+    # [3.5..5.5s]: ch0 に混ざる ch1 患者 (amp=2800 / 2800)
+    # 実ストリーム同様に区間別フレームとして送信し、時刻別の RMS 履歴を保持させる
+    pcm_part_0 = array.array("h", [400, 3000] * 32000).tobytes()
+    pcm_part_1 = array.array("h", [4500, 600] * 24000).tobytes()
+    pcm_part_2 = array.array("h", [2800, 2800] * 32000).tobytes()
+
+    mixed_words_payload = json.dumps(
+        {
+            "type": "Results",
+            "channel_index": [0, 2],
+            "start": 2.1,
+            "duration": 3.2,
+            "is_final": True,
+            "speech_final": True,
+            "channel": {
+                "alternatives": [
+                    {
+                        "transcript": "今日は体調どうですか。昨日から少し熱があります。",
+                        "confidence": 0.94,
+                        "words": [
+                            {
+                                "punctuated_word": "今日は",
+                                "start": 2.1,
+                                "end": 2.5,
+                                "confidence": 0.95,
+                            },
+                            {
+                                "punctuated_word": "体調",
+                                "start": 2.5,
+                                "end": 2.9,
+                                "confidence": 0.95,
+                            },
+                            {
+                                "punctuated_word": "どうですか。",
+                                "start": 2.9,
+                                "end": 3.4,
+                                "confidence": 0.95,
+                            },
+                            {
+                                "punctuated_word": "昨日から",
+                                "start": 3.9,
+                                "end": 4.4,
+                                "confidence": 0.93,
+                            },
+                            {
+                                "punctuated_word": "少し",
+                                "start": 4.4,
+                                "end": 4.7,
+                                "confidence": 0.93,
+                            },
+                            {
+                                "punctuated_word": "熱があります。",
+                                "start": 4.7,
+                                "end": 5.3,
+                                "confidence": 0.93,
+                            },
+                        ],
+                    }
+                ]
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    async def _run() -> None:
+        ws = _StubClientWs(
+            [
+                json.dumps({"type": "Auth", "access_token": "valid-token"}),
+                json.dumps(
+                    {
+                        "type": "SpeakerProfile",
+                        "model_id": "3dspeaker_campplus_zh_en_16k_contiguous_v2",
+                        "embedding": pharm_vec,
+                    }
+                ),
+                pcm_part_0,
+                pcm_part_1,
+                pcm_part_2,
+                json.dumps({"type": "CloseStream"}),
+            ]
+        )
+        dg = _StubDeepgramClient(
+            [
+                _dg_result(
+                    channel=1,
+                    text="よろしくお願いします。",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.1,
+                    duration=1.6,
+                ),
+                mixed_words_payload,
+            ]
+        )
+        llm = _CountingLlmClient()
+        spk = _AmpRoutingSpeakerClient()
+        registry = ConversationSessionRegistry()
+
+        await relay_deepgram_stream(
+            ws,
+            TranscriptionStreamConfig(channels=2, enable_soap=True, conversation_id="conv-split"),
+            client=dg,
+            auth_client=_StubAuthClient(),
+            llm_client=llm,
+            speaker_client=spk,
+            conversation_registry=registry,
+            soap_timing=_fast_timing(),
+            now_fn=lambda: 1_000_000.0,
+        )
+
+        record = registry.get_or_create(user_id="user-1", conversation_id="conv-split")
+        finals = record.transcript_state.finalized_segments
+        assert [(s.speaker_role, s.text) for s in finals] == [
+            ("patient", "よろしくお願いします。"),
+            ("pharmacist", "今日は体調どうですか。"),
+            ("patient", "昨日から少し熱があります。"),
+        ]
+
+    asyncio.run(_run())
+
+
+def test_ws_manual_speaker_override_updates_segment_and_reconciles_soap() -> None:
+    async def _run() -> None:
+        ws = _StubClientWs(
+            [
+                json.dumps({"type": "Auth", "access_token": "valid-token"}),
+            ]
+        )
+        dg = _StubDeepgramClient(
+            [
+                _dg_result(
+                    channel=0,
+                    text="毎食後に1錠飲んでください",
+                    is_final=True,
+                    speech_final=True,
+                    start=0.2,
+                    duration=1.2,
+                )
+            ]
+        )
+        llm = _CountingLlmClient()
+        registry = ConversationSessionRegistry()
+
+        task = asyncio.create_task(
+            relay_deepgram_stream(
+                ws,
+                TranscriptionStreamConfig(
+                    channels=2, enable_soap=True, conversation_id="conv-override"
+                ),
+                client=dg,
+                auth_client=_StubAuthClient(),
+                llm_client=llm,
+                conversation_registry=registry,
+                soap_timing=_fast_timing(),
+            )
+        )
+
+        # 初回 SOAP 生成（P に反映）まで待機してから、話者を unknown へ手動訂正する
+        for _ in range(80):
+            events = ws.parsed_events()
+            if any(
+                ev.get("type") == "SoapUpdated" and ev["soap"]["sections"]["P"]["items"]
+                for ev in events
+            ):
+                break
+            await asyncio.sleep(0.02)
+
+        record = registry.get_or_create(user_id="user-1", conversation_id="conv-override")
+        seg = record.transcript_state.finalized_segments[0]
+        await ws._incoming.put(
+            json.dumps(
+                {
+                    "type": "UpdateSegmentSpeaker",
+                    "stream_id": seg.stream_id,
+                    "segment_id": seg.segment_id,
+                    "speaker_role": "unknown",
+                }
+            )
+        )
+        for _ in range(80):
+            events = ws.parsed_events()
+            if any(
+                ev.get("type") == "SoapUpdated" and ev.get("retracted_item_ids") for ev in events
+            ):
+                break
+            await asyncio.sleep(0.02)
+
+        await ws._incoming.put(json.dumps({"type": "CloseStream"}))
+        await task
+
+        events = ws.parsed_events()
+        refined_transcript = [
+            ev
+            for ev in events
+            if ev.get("type") == "TranscriptUpdated"
+            and ev["segment"]["segment_id"] == seg.segment_id
+            and ev["segment"]["status"] == "refined"
+        ]
+        assert refined_transcript
+        assert refined_transcript[-1]["segment"]["speaker_role"] == "unknown"
+
+        soap_updates = [ev for ev in events if ev.get("type") == "SoapUpdated"]
+        assert any(ev.get("retracted_item_ids") for ev in soap_updates)
+        assert soap_updates[-1]["soap"]["sections"]["P"]["items"] == []
+
+    asyncio.run(_run())

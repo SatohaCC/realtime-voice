@@ -10,6 +10,7 @@ import {
   createInitialConversationState,
   prepareStreamReconnect,
 } from "@/shared/lib/conversation/conversationReducer";
+import type { SpeakerRole } from "@/shared/lib/conversation/types";
 import { getValidAccessToken, subscribeAuthState } from "@/shared/lib/supabase/client";
 import { AudioLevelHistory } from "@/shared/lib/transcription/audioLevelHistory";
 import {
@@ -328,6 +329,15 @@ export function useRealtimeTranscription({
     setTranscriptionError(null);
   }, []);
 
+  const updateSegmentSpeaker = useCallback(
+    (streamId: string, segmentId: string, speakerRole: SpeakerRole) => {
+      const run = runRef.current;
+      if (!run || run.invalidated || run.phase !== "streaming") return;
+      run.session?.updateSegmentSpeaker(streamId, segmentId, speakerRole);
+    },
+    [],
+  );
+
   return {
     audio,
     segments: transcriptState.segments,
@@ -339,5 +349,6 @@ export function useRealtimeTranscription({
     toggleTranscription,
     clearTranscripts,
     startNewConversation,
+    updateSegmentSpeaker,
   };
 }

@@ -45,6 +45,11 @@ export interface DeepgramTranscriptEvent {
 
 export interface DeepgramStreamSession {
   sendAudio: (pcm16: ArrayBuffer) => void;
+  updateSegmentSpeaker: (
+    streamId: string,
+    segmentId: string,
+    speakerRole: "pharmacist" | "patient" | "unknown",
+  ) => void;
   close: () => Promise<void>;
 }
 
@@ -325,6 +330,17 @@ export function createDeepgramStreamSession({
       sendAudio: (pcm16) => {
         if (!settled || closing || socket.readyState !== WebSocket.OPEN) return;
         socket.send(pcm16);
+      },
+      updateSegmentSpeaker: (streamId, segmentId, speakerRole) => {
+        if (!settled || closing || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(
+          JSON.stringify({
+            type: "UpdateSegmentSpeaker",
+            stream_id: streamId,
+            segment_id: segmentId,
+            speaker_role: speakerRole,
+          }),
+        );
       },
       close: () => {
         if (closing || closed) return closePromise;

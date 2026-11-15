@@ -183,6 +183,16 @@ class BackendAudioLevelHistory:
 
 
 @dataclass(frozen=True)
+class DeepgramWordTiming:
+    """Deepgram alternatives[].words の単語別時刻情報。"""
+
+    text: str
+    start_sec: float
+    end_sec: float
+    confidence: float = 0.0
+
+
+@dataclass(frozen=True)
 class DeepgramTranscriptInput:
     """Deepgram 受信メッセージから正規化へ渡す抽出済みデータ。"""
 
@@ -193,6 +203,64 @@ class DeepgramTranscriptInput:
     start_sec: float
     end_sec: float
     confidence: float
+    words: tuple[DeepgramWordTiming, ...] = ()
+
+
+def join_deepgram_words(words: Sequence[DeepgramWordTiming]) -> str:
+    """日本語・英字混在の単語列を自然な表記へ連結する。"""
+    parts: list[str] = []
+    for word in words:
+        token = word.text.strip()
+        if not token:
+            continue
+        if (
+            parts
+            and parts[-1][-1].isascii()
+            and parts[-1][-1].isalnum()
+            and token[0].isascii()
+            and token[0].isalnum()
+        ):
+            parts.append(" ")
+        parts.append(token)
+    return "".join(parts)
+
+
+_SENTENCE_END_CHARS = ("。", "！", "？", "!", "?")
+
+
+def build_word_clause_candidates(
+    words: Sequence[DeepgramWordTiming],
+    *,
+    min_chunk_sec: float,
+    min_pause_sec: float = 0.35,
+    max_chunks: int = 4,
+) -> list[tuple[DeepgramWordTiming, ...]]:
+    """単語列を句読点・無音ポーズで候補チャンクに分割する（分割不要なら空リスト）。"""
+    if len(words) < 2 or max_chunks < 2:
+        return []
+    chunks: list[tuple[DeepgramWordTiming, ...]] = []
+    start_idx = 0
+    total_end = words[-1].end_sec
+    for idx in range(len(words) - 1):
+        if len(chunks) >= max_chunks - 1:
+            break
+        cur = words[idx]
+        nxt = words[idx + 1]
+        is_boundary = cur.text.rstrip().endswith(_SENTENCE_END_CHARS) or (
+            nxt.start_sec - cur.end_sec >= min_pause_sec
+        )
+        if not is_boundary:
+            continue
+        chunk_dur = cur.end_sec - words[start_idx].start_sec
+        rem_dur = total_end - nxt.start_sec
+        if chunk_dur >= min_chunk_sec and rem_dur >= min_chunk_sec:
+            chunks.append(tuple(words[start_idx : idx + 1]))
+            start_idx = idx + 1
+
+    if not chunks:
+        return []
+    chunks.append(tuple(words[start_idx:]))
+    return chunks
 
 
 @dataclass(frozen=True)
@@ -470,6 +538,7 @@ class ConversationTranscriptState:
         self._segment_index_by_key: dict[tuple[str, str], int] = {}
         self._suppressed_candidates: list[TranscriptSegmentModel] = []
         self._active_interim_ids: dict[tuple[str, int], str] = {}
+        self._manual_speaker_overrides: set[tuple[str, str]] = set()
         self._audio_history = BackendAudioLevelHistory()
         self._pcm_buffer = BackendAudioPcmRingBuffer(max_history_seconds=pcm_history_seconds)
         self._speaker_tracker = speaker_tracker or ConversationSpeakerTracker()
@@ -524,6 +593,66 @@ class ConversationTranscriptState:
             >= min_sec
         )
 
+    def needs_turn_split_probe(self, event: DeepgramTranscriptInput) -> bool:
+        """1発話内に別話者が混在しうる長尺セグメントかを判定する。"""
+        if not event.is_final or not self._speaker_tracker.has_pharmacist_profile:
+            return False
+        if len(event.words) < 2:
+            return False
+        min_sec = SpeakerMatchThresholds.from_settings().min_embed_sec
+        return (event.end_sec - event.start_sec) >= min_sec * 2.0
+
+    def classify_probe_segment(
+        self,
+        *,
+        channel_index: int,
+        start_sec: float,
+        end_sec: float,
+        segment_embedding: Sequence[float] | None,
+    ) -> SpeakerRole:
+        """会話状態を書き換えずに候補区間の話者ロールを試験判定する。"""
+        levels = self._audio_history.levels_for(start_sec, end_sec)
+        noise_floor = self._pcm_buffer.estimate_noise_floor()
+        return self._speaker_tracker.verify_segment(
+            channel_index=channel_index,
+            duration_sec=max(0.0, end_sec - start_sec),
+            channel_levels=levels,
+            segment_embedding=segment_embedding,
+            noise_floor=noise_floor,
+            mutate_patient_centroid=False,
+        ).speaker_role
+
+    def override_segment_speaker(
+        self,
+        *,
+        stream_id: str,
+        segment_id: str,
+        speaker_role: SpeakerRole,
+    ) -> TranscriptSegmentModel | None:
+        """確定済み発話の話者ロールを手動訂正し、自動再訂正対象から保護する。"""
+        key = (stream_id, segment_id)
+        idx = self._segment_index_by_key.get(key)
+        if idx is None:
+            return None
+        existing = self._segments[idx]
+        if existing.status == "interim":
+            return None
+        self._manual_speaker_overrides.add(key)
+        if existing.speaker_role == speaker_role:
+            return None
+        self.transcript_revision += 1
+        updated = existing.model_copy(
+            update={
+                "segment_revision": existing.segment_revision + 1,
+                "transcript_revision": self.transcript_revision,
+                "speaker_role": speaker_role,
+                "speaker_label": SPEAKER_LABEL_BY_ROLE[speaker_role],
+                "status": "refined",
+            }
+        )
+        self._segments[idx] = updated
+        return updated
+
     def speaker_embedding_interval(self, event: DeepgramTranscriptInput) -> tuple[float, float]:
         """近接した短発話を蓄積できる場合は、再照合対象全体の区間を返す。"""
         pending = self._pending_short_segments(event)
@@ -564,6 +693,7 @@ class ConversationTranscriptState:
             if (
                 seg.channel_index != channel
                 or seg.speaker_role != "unknown"
+                or (seg.stream_id, seg.segment_id) in self._manual_speaker_overrides
                 or seg.end_sec - seg.start_sec >= thresholds.min_embed_sec
                 or not 0 <= next_start - seg.end_sec <= 0.35
                 or not dominant(seg.start_sec, seg.end_sec)

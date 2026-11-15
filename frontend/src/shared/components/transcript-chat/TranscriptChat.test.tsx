@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { groupTranscriptTurns, TranscriptChat } from "./TranscriptChat";
 
 const SAMPLE_SEGMENTS = [
@@ -7,6 +7,7 @@ const SAMPLE_SEGMENTS = [
     streamId: "s1",
     segmentId: "seg-1",
     channelIndex: 0 as const,
+    speakerRole: "pharmacist" as const,
     roleName: "薬剤師",
     micLabel: "マイク1",
     timeLabel: "00:01.0",
@@ -18,6 +19,7 @@ const SAMPLE_SEGMENTS = [
     streamId: "s1",
     segmentId: "seg-2",
     channelIndex: 1 as const,
+    speakerRole: "patient" as const,
     roleName: "患者",
     micLabel: "マイク2",
     timeLabel: "00:04.2",
@@ -29,6 +31,7 @@ const SAMPLE_SEGMENTS = [
     streamId: "s1",
     segmentId: "seg-3",
     channelIndex: 1 as const,
+    speakerRole: "patient" as const,
     roleName: "患者",
     micLabel: "マイク2",
     timeLabel: "00:06.8",
@@ -93,5 +96,24 @@ describe("TranscriptChat", () => {
     const jumpButton = screen.getByRole("button", { name: "↓ 新しい発話" });
     fireEvent.click(jumpButton);
     expect(screen.queryByRole("button", { name: "↓ 新しい発話" })).not.toBeInTheDocument();
+  });
+
+  it("確定済み発話の話者セレクタ変更でグループ内全セグメントの訂正ハンドラを呼ぶ", () => {
+    const onChangeSegmentSpeaker = vi.fn();
+    render(
+      <TranscriptChat
+        title="文字起こし"
+        segments={SAMPLE_SEGMENTS}
+        emptyMessage="空"
+        scrollToBottomLabel="↓ 新しい発話"
+        onChangeSegmentSpeaker={onChangeSegmentSpeaker}
+      />,
+    );
+
+    const selector = screen.getByLabelText("00:04.2 の話者を変更");
+    fireEvent.change(selector, { target: { value: "pharmacist" } });
+    expect(onChangeSegmentSpeaker).toHaveBeenCalledTimes(2);
+    expect(onChangeSegmentSpeaker).toHaveBeenNthCalledWith(1, "s1", "seg-2", "pharmacist");
+    expect(onChangeSegmentSpeaker).toHaveBeenNthCalledWith(2, "s1", "seg-3", "pharmacist");
   });
 });

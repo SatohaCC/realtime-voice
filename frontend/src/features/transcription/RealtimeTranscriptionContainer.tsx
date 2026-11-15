@@ -202,6 +202,7 @@ export function RealtimeTranscriptionContainer() {
     error,
     toggleTranscription,
     startNewConversation,
+    updateSegmentSpeaker,
   } = useRealtimeTranscription({
     speakerProfile: speaker.voiceprint
       ? { modelId: speaker.voiceprint.modelId, embedding: speaker.voiceprint.embedding }
@@ -294,6 +295,7 @@ export function RealtimeTranscriptionContainer() {
           segmentId: segment.segment_id,
           channelIndex: segment.channel_index,
           align: segment.speaker_role === "pharmacist" ? "right" : "left",
+          speakerRole: segment.speaker_role,
           roleName: speakerRoleLabel(segment.speaker_role),
           timeLabel: formatTimestamp(segment.start_sec),
           text: segment.text,
@@ -482,6 +484,8 @@ export function RealtimeTranscriptionContainer() {
           "「文字起こし開始」を押して話しかけると、患者（左）と薬剤師（右）の会話が表示されます。",
         scrollToBottomLabel: "↓ 新しい発話",
         highlightedSegmentKey,
+        onChangeSegmentSpeaker:
+          audio.mode === "dual" && isStreaming ? updateSegmentSpeaker : undefined,
       }}
       soapPanel={{
         title: "SOAP",

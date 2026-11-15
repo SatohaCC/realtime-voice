@@ -169,4 +169,58 @@ describe("transcriptReducer", () => {
     });
     expect(parseSpeakerProfileAck('{"type":"Results"}')).toBeNull();
   });
+
+  it("updateSegmentSpeaker が接続済みセッションで UpdateSegmentSpeaker フレームを送信する", async () => {
+    const sent: string[] = [];
+    class MockWebSocket {
+      static OPEN = 1;
+      static CONNECTING = 0;
+      readyState = MockWebSocket.OPEN;
+      binaryType = "arraybuffer";
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      constructor() {
+        setTimeout(() => {
+          this.onopen?.();
+          this.onmessage?.({
+            data: JSON.stringify({ type: "AuthOk", expires_at: 200, session_expires_at: 300 }),
+          });
+        }, 0);
+      }
+      send(data: string | ArrayBuffer) {
+        if (typeof data === "string") {
+          sent.push(data);
+          if (JSON.parse(data).type === "CloseStream") {
+            setTimeout(() => this.onclose?.({ code: 1000, reason: "" }), 0);
+          }
+        }
+      }
+      close() {
+        this.onclose?.({ code: 1000, reason: "" });
+      }
+    }
+
+    const originalWs = globalThis.WebSocket;
+    globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+    try {
+      const { createDeepgramStreamSession } = await import("./deepgramClient");
+      const session = await createDeepgramStreamSession({
+        accessToken: "token",
+        channels: 2,
+        baseUrl: "ws://localhost:8000",
+      });
+      session.updateSegmentSpeaker("stream-1", "seg-2", "patient");
+      expect(sent.map((item) => JSON.parse(item))).toContainEqual({
+        type: "UpdateSegmentSpeaker",
+        stream_id: "stream-1",
+        segment_id: "seg-2",
+        speaker_role: "patient",
+      });
+      await session.close();
+    } finally {
+      globalThis.WebSocket = originalWs;
+    }
+  });
 });

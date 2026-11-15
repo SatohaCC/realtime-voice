@@ -5,11 +5,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/shared/ui/badge/Badge";
 import { transcriptChatStyles as s } from "./TranscriptChat.styles";
 
+export type TranscriptSpeakerRole = "pharmacist" | "patient" | "unknown";
+
 export interface TranscriptChatSegment {
   streamId: string;
   segmentId: string;
   channelIndex: 0 | 1;
   align?: "left" | "right";
+  speakerRole?: TranscriptSpeakerRole;
   roleName: string;
   micLabel?: string;
   timeLabel: string;
@@ -25,12 +28,18 @@ export interface TranscriptChatProps {
   emptyMessage: string;
   scrollToBottomLabel: string;
   highlightedSegmentKey?: string | null;
+  onChangeSegmentSpeaker?: (
+    streamId: string,
+    segmentId: string,
+    speakerRole: TranscriptSpeakerRole,
+  ) => void;
 }
 
 interface GroupedTurn {
   turnKey: string;
   channelIndex: 0 | 1;
   align: "left" | "right";
+  speakerRole?: TranscriptSpeakerRole;
   roleName: string;
   micLabel?: string;
   timeLabel: string;
@@ -58,6 +67,7 @@ export function groupTranscriptTurns(
       !last.isInterim &&
       last.channelIndex === segment.channelIndex &&
       last.align === align &&
+      last.speakerRole === segment.speakerRole &&
       last.roleName === segment.roleName
     ) {
       groups[groups.length - 1] = {
@@ -70,6 +80,7 @@ export function groupTranscriptTurns(
       turnKey: key,
       channelIndex: segment.channelIndex,
       align,
+      speakerRole: segment.speakerRole,
       roleName: segment.roleName,
       micLabel: segment.micLabel,
       timeLabel: segment.timeLabel,
@@ -98,6 +109,7 @@ export function TranscriptChat({
   emptyMessage,
   scrollToBottomLabel,
   highlightedSegmentKey = null,
+  onChangeSegmentSpeaker,
 }: TranscriptChatProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const segmentRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
@@ -188,9 +200,30 @@ export function TranscriptChat({
                     {...stylex.props(s.turnRow, isRight ? s.turnRowRight : s.turnRowLeft)}
                   >
                     <div {...stylex.props(s.turnMeta)}>
-                      <span {...stylex.props(isRight ? s.roleChipRight : s.roleChipLeft)}>
-                        {turn.roleName}
-                      </span>
+                      {onChangeSegmentSpeaker && !turn.isInterim && turn.speakerRole ? (
+                        <select
+                          aria-label={`${turn.timeLabel} の話者を変更`}
+                          value={turn.speakerRole}
+                          onChange={(event) => {
+                            const nextRole = event.target.value as TranscriptSpeakerRole;
+                            for (const item of turn.items) {
+                              onChangeSegmentSpeaker(item.streamId, item.segmentId, nextRole);
+                            }
+                          }}
+                          {...stylex.props(
+                            s.roleSelect,
+                            isRight ? s.roleChipRight : s.roleChipLeft,
+                          )}
+                        >
+                          <option value="pharmacist">薬剤師</option>
+                          <option value="patient">患者</option>
+                          <option value="unknown">話者不明</option>
+                        </select>
+                      ) : (
+                        <span {...stylex.props(isRight ? s.roleChipRight : s.roleChipLeft)}>
+                          {turn.roleName}
+                        </span>
+                      )}
                       {turn.micLabel ? (
                         <span {...stylex.props(s.micText)}>{turn.micLabel}</span>
                       ) : null}
