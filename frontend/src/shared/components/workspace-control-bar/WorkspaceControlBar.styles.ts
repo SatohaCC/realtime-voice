@@ -1,0 +1,122 @@
+import * as stylex from "@stylexjs/stylex";
+import { tokens } from "../../styles/tokens.stylex";
+
+export const workspaceControlBarStyles = stylex.create({
+  root: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.75rem",
+    padding: "0.875rem 1.125rem",
+    backgroundColor: tokens.surfaceContainerLow,
+    borderRadius: tokens.cornerLargeIncreased,
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: tokens.outlineVariant,
+    minWidth: 0,
+    flexShrink: 0,
+  },
+  topRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: { default: "0.75rem", "@media (max-width: 599px)": "0.625rem" },
+    minWidth: 0,
+  },
+  statusGroup: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: "0.5rem",
+    minWidth: 0,
+  },
+  metaText: {
+    fontSize: "0.8125rem",
+    color: tokens.onSurfaceVariant,
+  },
+  actionsGroup: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: "0.5rem",
+    minWidth: 0,
+  },
+  channelsRow: {
+    display: "grid",
+    gridTemplateColumns: {
+      default: "repeat(2, minmax(0, 1fr))",
+      "@media (max-width: 760px)": "minmax(0, 1fr)",
+    },
+    gap: "0.75rem",
+    minWidth: 0,
+  },
+  channelSingleRow: {
+    gridTemplateColumns: "minmax(0, 1fr)",
+  },
+  channelItem: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.45rem",
+    padding: "0.55rem 0.75rem",
+  },
+  channelItemActive: {
+    borderColor: tokens.primary,
+  },
+  channelSelectRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.625rem",
+    minWidth: 0,
+  },
+  channelLabel: {
+    fontSize: "0.8125rem",
+    fontWeight: 600,
+    color: tokens.onSurface,
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+  },
+  channelSelectWrap: {
+    flex: "1 1 0%",
+    minWidth: 0,
+  },
+  channelStatusRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.625rem",
+    minWidth: 0,
+  },
+  meterTrack: {
+    flex: "1 1 0%",
+    minWidth: 0,
+    height: "0.35rem",
+    borderRadius: tokens.cornerFull,
+    backgroundColor: tokens.surfaceContainerHigh,
+    overflow: "clip",
+  },
+  meterFill: {
+    height: "100%",
+    backgroundColor: tokens.primary,
+    transitionProperty: "width",
+    transitionDuration: tokens.motionDuration,
+    transitionTimingFunction: tokens.motionEasing,
+  },
+  noticeBox: {
+    fontSize: "0.8125rem",
+    lineHeight: 1.45,
+    color: tokens.onSecondaryContainer,
+    backgroundColor: tokens.secondaryContainer,
+    borderRadius: tokens.cornerSmall,
+    paddingInline: "0.75rem",
+    paddingBlock: "0.45rem",
+  },
+  errorBox: {
+    fontSize: "0.8125rem",
+    lineHeight: 1.45,
+    color: tokens.onErrorContainer,
+    backgroundColor: tokens.errorContainer,
+    borderRadius: tokens.cornerSmall,
+    paddingInline: "0.75rem",
+    paddingBlock: "0.5rem",
+    overflowWrap: "anywhere",
+  },
+});

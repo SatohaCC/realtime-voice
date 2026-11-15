@@ -4,6 +4,7 @@ import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef } from "react";
 import { Badge } from "@/shared/ui/badge/Badge";
 import { Button } from "@/shared/ui/button/Button";
+import { Card } from "@/shared/ui/card/Card";
 import { transcriptFeedStyles as s } from "./TranscriptFeed.styles";
 
 export interface TranscriptFeedItem {
@@ -75,7 +76,12 @@ export function TranscriptFeed({
                   : "neutral";
 
             return (
-              <li key={segment.id} {...stylex.props(s.item, isInterim && s.itemInterim)}>
+              <Card
+                as="li"
+                key={segment.id}
+                variant="outlined"
+                style={[s.item, isInterim && s.itemInterim]}
+              >
                 <div {...stylex.props(s.itemMeta)}>
                   <div {...stylex.props(s.speakerGroup)}>
                     <span
@@ -91,7 +97,7 @@ export function TranscriptFeed({
                   <span {...stylex.props(s.timeLabel)}>{segment.timeLabel}</span>
                 </div>
                 <p {...stylex.props(s.text, isInterim && s.textInterim)}>{segment.text}</p>
-              </li>
+              </Card>
             );
           })}
         </ul>

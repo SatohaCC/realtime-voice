@@ -15,13 +15,10 @@ export default async function TranscriptionPage() {
   return (
     <main id="main-content" tabIndex={-1} {...stylex.props(s.main)}>
       <div {...stylex.props(s.header)}>
-        <h1 {...stylex.props(s.title)}>リアルタイム文字起こし</h1>
+        <h1 {...stylex.props(s.title)}>リアルタイム文字起こし · SOAP</h1>
         <p {...stylex.props(s.meta)}>AudioWorklet · Deepgram Nova-3</p>
       </div>
-      <div {...stylex.props(s.panel)}>
-        <p {...stylex.props(s.panelDescription)}>
-          1本または2本のマイクを選択して、話者別のリアルタイム文字起こしを確認できます。
-        </p>
+      <div {...stylex.props(s.workspaceShell)}>
         <RealtimeTranscriptionContainer />
       </div>
     </main>

@@ -39,6 +39,8 @@ async def transcribe_websocket(
     language: str = Query(default="ja"),
     sample_rate: int = Query(default=16000, ge=8000, le=48000),
     endpointing: int = Query(default=300, ge=10, le=5000),
+    soap: bool = Query(default=False),
+    conversation_id: str | None = Query(default=None),
 ) -> None:
     """Origin と初回 Auth フレームを検証し、PCM 音声を Deepgram へ双方向中継する。"""
     if not is_origin_allowed(websocket.headers.get("origin")):
@@ -52,6 +54,8 @@ async def transcribe_websocket(
         language=language,
         sample_rate=sample_rate,
         endpointing_ms=endpointing,
+        enable_soap=soap,
+        conversation_id=conversation_id,
     )
     adapter = _FastApiWebSocketAdapter(websocket)
 

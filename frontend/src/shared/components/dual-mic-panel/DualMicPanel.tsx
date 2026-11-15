@@ -3,6 +3,8 @@
 import * as stylex from "@stylexjs/stylex";
 import { Badge, type BadgeProps } from "@/shared/ui/badge/Badge";
 import { Button } from "@/shared/ui/button/Button";
+import { Card } from "@/shared/ui/card/Card";
+import { SegmentedControl } from "@/shared/ui/segmented-control/SegmentedControl";
 import { Select } from "@/shared/ui/select/Select";
 import { dualMicPanelStyles } from "./DualMicPanel.styles";
 
@@ -87,26 +89,17 @@ export function DualMicPanel({
         </div>
 
         <div {...stylex.props(dualMicPanelStyles.headerActions)}>
-          <fieldset aria-label={title} {...stylex.props(dualMicPanelStyles.modeGroup)}>
-            <Button
-              variant={mode === "single" ? "tonal" : "text"}
-              size="sm"
-              aria-pressed={mode === "single"}
-              disabled={isCapturing}
-              onClick={() => onModeChange("single")}
-            >
-              {modeLabels.single}
-            </Button>
-            <Button
-              variant={mode === "dual" ? "tonal" : "text"}
-              size="sm"
-              aria-pressed={mode === "dual"}
-              disabled={isCapturing}
-              onClick={() => onModeChange("dual")}
-            >
-              {modeLabels.dual}
-            </Button>
-          </fieldset>
+          <SegmentedControl
+            aria-label={title}
+            size="sm"
+            value={mode}
+            disabled={isCapturing}
+            onValueChange={onModeChange}
+            items={[
+              { value: "single", label: modeLabels.single },
+              { value: "dual", label: modeLabels.dual },
+            ]}
+          />
 
           <Button variant="outlined" size="sm" onClick={onRefreshDevices} disabled={isCapturing}>
             {refreshDevicesLabel}
@@ -119,12 +112,13 @@ export function DualMicPanel({
           const percent = Math.round(Math.max(0, Math.min(1, channel.level)) * 100);
 
           return (
-            <div
+            <Card
               key={channel.id}
-              {...stylex.props(
+              variant="outlined"
+              style={[
                 dualMicPanelStyles.channelCard,
                 channel.isSpeaking && dualMicPanelStyles.channelCardActive,
-              )}
+              ]}
             >
               <div {...stylex.props(dualMicPanelStyles.channelHeader)}>
                 <span {...stylex.props(dualMicPanelStyles.channelTitle)}>{channel.label}</span>
@@ -165,7 +159,7 @@ export function DualMicPanel({
                   )}
                 />
               </div>
-            </div>
+            </Card>
           );
         })}
       </div>

@@ -32,7 +32,9 @@ test("auth/callback 直接アクセスと logout のメソッド・Origin 保護
 }) => {
   await page.goto("/auth/callback");
   await expect(page).toHaveURL(/\/login\?error=missing_code/);
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "認証コードが見つかりませんでした" }),
+  ).toBeVisible();
 
   const getLogout = await request.get("/auth/logout");
   expect(getLogout.status()).toBe(405);

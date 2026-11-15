@@ -46,15 +46,20 @@ export const pageStyles = stylex.create({
   heroLink: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "1rem",
+    gap: "0.5rem",
     marginTop: "2rem",
     color: tokens.onPrimaryContainer,
     fontSize: "0.875rem",
     fontWeight: 600,
-    textUnderlineOffset: "0.3rem",
+    textDecoration: "none",
     paddingBlock: "0.5rem",
     outline: { default: "none", ":focus-visible": `3px solid ${tokens.primary}` },
     outlineOffset: 4,
+  },
+  heroLinkLabel: {
+    textDecorationLine: "underline",
+    textUnderlineOffset: "0.3rem",
+    textDecorationThickness: "1.5px",
   },
   art: {
     position: "relative",
@@ -109,10 +114,7 @@ export const pageStyles = stylex.create({
   },
   muted: { color: tokens.onSurfaceVariant, fontSize: "0.8125rem" },
   panel: {
-    backgroundColor: tokens.surfaceContainerLow,
-    borderRadius: tokens.cornerExtraLargeIncreased,
     padding: { default: "2rem", "@media (max-width: 599px)": "1.5rem" },
-    minWidth: 0,
   },
   panelDescription: {
     color: tokens.onSurfaceVariant,

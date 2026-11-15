@@ -8,6 +8,8 @@ class TranscriptionStreamConfig(BaseModel):
     language: str = "ja"
     sample_rate: int = 16000
     endpointing_ms: int = 300
+    enable_soap: bool = False
+    conversation_id: str | None = None
 
 
 class TranscriptionErrorEvent(BaseModel):

@@ -2,16 +2,12 @@ import * as stylex from "@stylexjs/stylex";
 import { tokens } from "../../styles/tokens.stylex";
 
 export const statusCardStyles = stylex.create({
-  root: { display: "flex", flexDirection: "column", gap: "1.5rem", minWidth: 0 },
+  root: { display: "flex", flexDirection: "column", gap: "1.5rem", padding: "1.25rem" },
   row: {
     display: "flex",
     flexDirection: "column",
     alignItems: "flex-start",
     gap: "0.75rem",
-    borderRadius: tokens.cornerLarge,
-    backgroundColor: tokens.surfaceContainer,
-    paddingBlock: "1.25rem",
-    paddingInline: "1.25rem",
     minWidth: 0,
   },
   label: {

@@ -2,6 +2,7 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { Button } from "@/shared/ui/button/Button";
+import { Card } from "@/shared/ui/card/Card";
 import { loginCardStyles as s } from "./LoginCard.styles";
 
 export interface LoginProviderOption {
@@ -51,7 +52,7 @@ export function LoginCard({
   const isBusy = pendingProviderId !== null;
 
   return (
-    <section aria-busy={isBusy} {...stylex.props(s.card)}>
+    <Card as="section" variant="outlined" aria-busy={isBusy} style={s.card}>
       <div {...stylex.props(s.header)}>
         <h1 {...stylex.props(s.title)}>{title}</h1>
         <p {...stylex.props(s.description)}>{description}</p>
@@ -86,6 +87,6 @@ export function LoginCard({
       </div>
 
       {footerNote ? <p {...stylex.props(s.footerNote)}>{footerNote}</p> : null}
-    </section>
+    </Card>
   );
 }

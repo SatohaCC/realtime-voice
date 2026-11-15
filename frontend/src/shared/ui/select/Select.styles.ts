@@ -8,12 +8,26 @@ export const selectStyles = stylex.create({
     gap: "0.375rem",
     minWidth: 0,
   },
+  rootCompact: {
+    gap: 0,
+  },
   label: {
     fontSize: "0.75rem",
     lineHeight: "1rem",
     fontWeight: 500,
     color: tokens.onSurfaceVariant,
     cursor: "pointer",
+  },
+  labelHidden: {
+    position: "absolute",
+    width: "1px",
+    height: "1px",
+    padding: 0,
+    margin: "-1px",
+    overflow: "hidden",
+    clipPath: "inset(50%)",
+    whiteSpace: "nowrap",
+    borderWidth: 0,
   },
   trigger: {
     display: "inline-flex",

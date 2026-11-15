@@ -32,7 +32,7 @@ test("セレクトと音声パネルに指定した枠線が適用される", as
   await expect(trigger).toContainText("Speaker B");
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto("/iframe.html?id=shared-components-dualmicpanel--single-idle&viewMode=story");
-  await expect(page.getByRole("group")).toHaveCSS("border-top-width", "0px");
+  await expect(page.getByRole("radiogroup")).toHaveCSS("border-top-width", "1px");
   await expect(page.getByRole("combobox")).toHaveCSS("border-top-width", "1px");
   // 実ページのカード内と同程度の幅でも、列の最小幅が親を押し広げない。
   await page.locator("#storybook-root").evaluate((root) => {

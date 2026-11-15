@@ -21,6 +21,7 @@ export interface SelectOption {
 
 export interface SelectProps {
   label: string;
+  hideLabel?: boolean;
   options: readonly SelectOption[];
   value?: string | null;
   defaultValue?: string | null;
@@ -35,6 +36,7 @@ export interface SelectProps {
  */
 export function Select({
   label,
+  hideLabel = false,
   options,
   value,
   defaultValue,
@@ -44,7 +46,7 @@ export function Select({
   style,
 }: SelectProps) {
   return (
-    <div {...stylex.props(s.root, style)}>
+    <div {...stylex.props(s.root, hideLabel && s.rootCompact, style)}>
       <UiSelect
         value={value}
         defaultValue={defaultValue}
@@ -52,7 +54,7 @@ export function Select({
         placeholder={placeholder}
         onValueChange={(nextValue) => onValueChange?.(nextValue)}
       >
-        <SelectLabel {...stylex.props(s.label)}>{label}</SelectLabel>
+        <SelectLabel {...stylex.props(s.label, hideLabel && s.labelHidden)}>{label}</SelectLabel>
         <SelectTrigger
           className={({ disabled: isDisabled }) =>
             stylex.props(s.trigger, isDisabled && s.triggerDisabled).className

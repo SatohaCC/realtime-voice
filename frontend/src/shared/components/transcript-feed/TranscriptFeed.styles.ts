@@ -52,9 +52,6 @@ export const transcriptFeedStyles = stylex.create({
     flexDirection: "column",
     gap: "0.5rem",
     padding: "1rem 1.125rem",
-    borderRadius: tokens.cornerLarge,
-    backgroundColor: tokens.surfaceContainerLowest,
-    border: `1px solid ${tokens.outlineVariant}`,
   },
   itemInterim: {
     backgroundColor: tokens.surfaceContainer,

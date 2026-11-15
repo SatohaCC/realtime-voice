@@ -11,11 +11,17 @@ from app.clients.deepgram_client import (
     DeepgramClientProtocol,
     DeepgramStreamProtocol,
 )
+from app.clients.soap_llm_client import SoapLlmClientProtocol
 from app.clients.supabase_auth_client import AuthClientError, AuthClientProtocol
 from app.core.config import settings
 from app.schemas.auth import WsAuthOkEvent
 from app.schemas.transcription import TranscriptionErrorEvent, TranscriptionStreamConfig
 from app.services.auth_service import authenticate_access_token, parse_ws_auth_frame
+from app.services.soap_stream_service import (
+    ConversationSessionRegistry,
+    SoapTimingOptions,
+    relay_soap_conversation_stream,
+)
 
 FINAL_RESULTS_TIMEOUT_SECONDS = 5
 
@@ -102,6 +108,10 @@ async def relay_deepgram_stream(
     auth_timeout_seconds: float | None = None,
     max_session_seconds: int | None = None,
     now_fn: Callable[[], float] | None = None,
+    llm_client: SoapLlmClientProtocol | None = None,
+    use_default_llm: bool = True,
+    conversation_registry: ConversationSessionRegistry | None = None,
+    soap_timing: SoapTimingOptions | None = None,
 ) -> None:
     """初回 Auth フレームを検証した上でブラウザ WebSocket と Deepgram を双方向中継する。"""
     resolved_auth_timeout = (
@@ -187,6 +197,23 @@ async def relay_deepgram_stream(
                 session_expires_at=session_expires_at,
             )
             await client_ws.send_text(auth_ok.model_dump_json())
+
+            if config.enable_soap:
+                await relay_soap_conversation_stream(
+                    client_ws=client_ws,
+                    deepgram_ws=deepgram_ws,
+                    config=config,
+                    user_id=user.user_id,
+                    user_expires_at=user.expires_at,
+                    remaining_seconds=remaining_seconds,
+                    on_close=on_close,
+                    llm_client=llm_client,
+                    use_default_llm=use_default_llm,
+                    registry=conversation_registry,
+                    timing=soap_timing,
+                    now_fn=get_now,
+                )
+                return
 
             client_task = asyncio.create_task(_forward_client_to_deepgram(client_ws, deepgram_ws))
             deepgram_task = asyncio.create_task(_forward_deepgram_to_client(deepgram_ws, client_ws))

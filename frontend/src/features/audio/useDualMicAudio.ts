@@ -101,8 +101,44 @@ export function useDualMicAudio(options?: UseDualMicAudioOptions) {
     };
   }, []);
 
+  const hasDuplicateDevices =
+    mode === "dual" && Boolean(mic1DeviceId && mic2DeviceId && mic1DeviceId === mic2DeviceId);
+
+  const selectMode = useCallback((nextMode: MicCaptureMode) => {
+    setMode(nextMode);
+    setError(null);
+  }, []);
+
+  const selectMic1DeviceId = useCallback(
+    (deviceId: string) => {
+      if (mode === "dual" && deviceId && deviceId === mic2DeviceId) {
+        setError("マイク 1（薬剤師）とマイク 2（患者）に同じデバイスは指定できません。");
+        return;
+      }
+      setError(null);
+      setMic1DeviceId(deviceId);
+    },
+    [mic2DeviceId, mode],
+  );
+
+  const selectMic2DeviceId = useCallback(
+    (deviceId: string) => {
+      if (mode === "dual" && deviceId && deviceId === mic1DeviceId) {
+        setError("マイク 1（薬剤師）とマイク 2（患者）に同じデバイスは指定できません。");
+        return;
+      }
+      setError(null);
+      setMic2DeviceId(deviceId);
+    },
+    [mic1DeviceId, mode],
+  );
+
   const startCapture = useCallback(async () => {
     if (captureRunRef.current) return false;
+    if (mode === "dual" && mic1DeviceId && mic2DeviceId && mic1DeviceId === mic2DeviceId) {
+      setError("マイク 1（薬剤師）とマイク 2（患者）に同じデバイスは指定できません。");
+      return false;
+    }
     const controller = new AbortController();
     captureRunRef.current = controller;
     setError(null);
@@ -158,11 +194,12 @@ export function useDualMicAudio(options?: UseDualMicAudioOptions) {
   return {
     devices,
     mode,
-    setMode,
+    setMode: selectMode,
     mic1DeviceId,
-    setMic1DeviceId,
+    setMic1DeviceId: selectMic1DeviceId,
     mic2DeviceId,
-    setMic2DeviceId,
+    setMic2DeviceId: selectMic2DeviceId,
+    hasDuplicateDevices,
     isCapturing,
     levels,
     speaking: [isLeftSpeaking, isRightSpeaking] as const,

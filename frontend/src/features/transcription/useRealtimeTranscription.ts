@@ -3,6 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDualMicAudio } from "@/features/audio/useDualMicAudio";
 import type { AudioCaptureFrame } from "@/shared/lib/audio/dualMicCapture";
+import {
+  applyConversationWsEvent,
+  type ConversationWorkspaceState,
+  clearSoapHighlights,
+  createInitialConversationState,
+  prepareStreamReconnect,
+} from "@/shared/lib/conversation/conversationReducer";
 import { getValidAccessToken, subscribeAuthState } from "@/shared/lib/supabase/client";
 import { AudioLevelHistory } from "@/shared/lib/transcription/audioLevelHistory";
 import {
@@ -21,7 +28,15 @@ interface TranscriptionRun {
   history: AudioLevelHistory;
   phase: Phase;
   invalidated: boolean;
+  conversationState: ConversationWorkspaceState;
   session?: DeepgramStreamSession;
+}
+
+function createConversationId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `conv-${crypto.randomUUID().slice(0, 12)}`;
+  }
+  return `conv-${Date.now().toString(36)}`;
 }
 
 export interface UseRealtimeTranscriptionOptions {
@@ -29,18 +44,44 @@ export interface UseRealtimeTranscriptionOptions {
   onAuthInvalidated?: () => void;
 }
 
-const SPEAKER_LABELS: Record<0 | 1, string> = { 0: "話者 A（マイク 1）", 1: "話者 B（マイク 2）" };
+const SPEAKER_LABELS: Record<0 | 1, string> = { 0: "薬剤師", 1: "患者" };
 
-/** 認証トークン取得・WebSocket 接続・収音・終了待機を独立したライフサイクルとして管理する。 */
+/** 認証トークン取得・WebSocket 接続・収音・SOAP会話同期を管理する Hook。 */
 export function useRealtimeTranscription({
   onAuthInvalidated,
 }: UseRealtimeTranscriptionOptions = {}) {
   const [transcriptState, setTranscriptState] = useState(createInitialTranscriptState);
+  const [conversationState, setConversationState] = useState<ConversationWorkspaceState>(() =>
+    createInitialConversationState("conv-initial"),
+  );
   const [phase, setPhase] = useState<Phase | "idle">("idle");
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const runRef = useRef<TranscriptionRun | null>(null);
+  const conversationIdRef = useRef<string>("conv-initial");
   const onAuthInvalidatedRef = useRef(onAuthInvalidated);
   onAuthInvalidatedRef.current = onAuthInvalidated;
+
+  useEffect(() => {
+    const generated = createConversationId();
+    conversationIdRef.current = generated;
+    setConversationState((current) =>
+      current.segments.length === 0 && current.soap.revision === 0
+        ? createInitialConversationState(generated)
+        : current,
+    );
+  }, []);
+
+  useEffect(() => {
+    if (conversationState.changedItemIds.length === 0) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      setConversationState((current) => clearSoapHighlights(current));
+    }, 2400);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [conversationState.changedItemIds]);
 
   const handleAudioFrame = useCallback((frame: AudioCaptureFrame) => {
     const run = runRef.current;
@@ -80,7 +121,10 @@ export function useRealtimeTranscription({
         run.controller.abort();
         void stopTranscription();
       }
+      const nextConversationId = createConversationId();
+      conversationIdRef.current = nextConversationId;
       setTranscriptState(createInitialTranscriptState());
+      setConversationState(createInitialConversationState(nextConversationId));
       setTranscriptionError(null);
     };
 
@@ -118,15 +162,34 @@ export function useRealtimeTranscription({
 
   const startTranscription = useCallback(async () => {
     if (runRef.current) return;
+    if (audio.hasDuplicateDevices) {
+      setTranscriptionError(
+        "マイク 1（薬剤師）とマイク 2（患者）に同じデバイスは指定できません。別のマイクを選ぶか「1マイク」へ切り替えてください。",
+      );
+      return;
+    }
+
+    const enableSoap = audio.mode === "dual";
+    if (enableSoap && conversationState.serverSyncLost) {
+      setTranscriptionError(
+        "会話を復元できません。下書きをコピーしてから新しい会話を開始してください。",
+      );
+      return;
+    }
+    const activeConversationId = conversationIdRef.current;
     const run: TranscriptionRun = {
       controller: new AbortController(),
       history: new AudioLevelHistory(),
       phase: "connecting",
       invalidated: false,
+      conversationState: prepareStreamReconnect(conversationState),
     };
     runRef.current = run;
     setTranscriptionError(null);
     setTranscriptState(startTranscriptSession);
+    if (enableSoap) {
+      setConversationState(run.conversationState);
+    }
     setPhase("connecting");
     let streamErrorMessage: string | null = null;
     const labels =
@@ -145,9 +208,23 @@ export function useRealtimeTranscription({
 
       const session = await createDeepgramStreamSession({
         accessToken,
-        channels: audio.mode === "dual" ? 2 : 1,
+        channels: enableSoap ? 2 : 1,
         language: "ja",
+        enableSoap,
+        conversationId: enableSoap ? activeConversationId : undefined,
         signal: run.controller.signal,
+        onConversationEvent: (event) => {
+          if (runRef.current !== run || run.invalidated) return;
+          const next = applyConversationWsEvent(run.conversationState, event);
+          run.conversationState = next;
+          setConversationState((current) => applyConversationWsEvent(current, event));
+          if (next.serverSyncLost) {
+            // 旧下書きを残し、復元できない会話への送信・受信を即時に止める
+            run.invalidated = true;
+            run.controller.abort();
+            void stopTranscription();
+          }
+        },
         onTranscript: (event) => {
           if (runRef.current !== run || run.invalidated) return;
           setTranscriptState((current) =>
@@ -186,6 +263,7 @@ export function useRealtimeTranscription({
       if (!started) {
         runRef.current = null;
         run.controller.abort();
+        void session.close();
         setPhase("idle");
         return;
       }
@@ -202,24 +280,43 @@ export function useRealtimeTranscription({
           error instanceof Error ? error.message : "リアルタイム文字起こしの開始に失敗しました。",
         );
     }
-  }, [audio.mode, audio.startCapture, audio.stopCapture]);
+  }, [
+    audio.hasDuplicateDevices,
+    audio.mode,
+    audio.startCapture,
+    audio.stopCapture,
+    conversationState,
+    stopTranscription,
+  ]);
 
   const toggleTranscription = useCallback(() => {
     if (runRef.current) void stopTranscription();
     else void startTranscription();
   }, [startTranscription, stopTranscription]);
-  const clearTranscripts = useCallback(
-    () => setTranscriptState(createInitialTranscriptState()),
-    [],
-  );
+
+  const clearTranscripts = useCallback(() => {
+    setTranscriptState(createInitialTranscriptState());
+  }, []);
+
+  const startNewConversation = useCallback(() => {
+    if (runRef.current) return;
+    const nextConversationId = createConversationId();
+    conversationIdRef.current = nextConversationId;
+    setTranscriptState(createInitialTranscriptState());
+    setConversationState(createInitialConversationState(nextConversationId));
+    setTranscriptionError(null);
+  }, []);
+
   return {
     audio,
     segments: transcriptState.segments,
+    conversation: conversationState,
     isConnecting: phase === "connecting",
     isStreaming: phase === "streaming",
     isStopping: phase === "stopping",
     error: transcriptionError ?? audio.error,
     toggleTranscription,
     clearTranscripts,
+    startNewConversation,
   };
 }

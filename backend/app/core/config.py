@@ -63,6 +63,26 @@ def _parse_positive_int(raw: str | None, default: int) -> int:
     return value if value > 0 else default
 
 
+def _parse_positive_float(raw: str | None, default: float) -> float:
+    if not raw:
+        return default
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _parse_non_negative_int(raw: str | None, default: int) -> int:
+    if not raw:
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
 _load_dotenv_files()
 
 
@@ -105,6 +125,55 @@ class Settings:
             os.getenv("TRANSCRIPTION_MAX_SESSION_SECONDS"), default=240
         )
     )
+    soap_llm_provider: str = field(
+        default_factory=lambda: os.getenv("SOAP_LLM_PROVIDER", "fake").strip().lower() or "fake"
+    )
+    soap_llm_model: str = field(default_factory=lambda: os.getenv("SOAP_LLM_MODEL", "").strip())
+    soap_llm_timeout_seconds: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SOAP_LLM_TIMEOUT_SECONDS"), default=15.0
+        )
+    )
+    soap_llm_max_retries: int = field(
+        default_factory=lambda: _parse_non_negative_int(
+            os.getenv("SOAP_LLM_MAX_RETRIES"), default=1
+        )
+    )
+    soap_llm_max_tokens: int = field(
+        default_factory=lambda: _parse_positive_int(os.getenv("SOAP_LLM_MAX_TOKENS"), default=1500)
+    )
+    soap_llm_max_input_chars: int = field(
+        default_factory=lambda: _parse_positive_int(
+            os.getenv("SOAP_LLM_MAX_INPUT_CHARS"), default=24000
+        )
+    )
+    soap_debounce_ms: int = field(
+        default_factory=lambda: _parse_positive_int(os.getenv("SOAP_DEBOUNCE_MS"), default=500)
+    )
+    soap_max_batch_wait_seconds: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SOAP_MAX_BATCH_WAIT_SECONDS"), default=2.0
+        )
+    )
+    soap_min_interval_seconds: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SOAP_MIN_INTERVAL_SECONDS"), default=2.0
+        )
+    )
+    soap_stt_final_timeout_seconds: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SOAP_STT_FINAL_TIMEOUT_SECONDS"), default=5.0
+        )
+    )
+    soap_stop_llm_budget_seconds: float = field(
+        default_factory=lambda: _parse_positive_float(
+            os.getenv("SOAP_STOP_LLM_BUDGET_SECONDS"), default=15.0
+        )
+    )
+    ws_send_queue_maxsize: int = field(
+        default_factory=lambda: _parse_positive_int(os.getenv("WS_SEND_QUEUE_MAXSIZE"), default=256)
+    )
+    transcription_protocol_version: int = 1
 
 
 settings = Settings()

@@ -1,3 +1,6 @@
+import { parseConversationWsEvent } from "../conversation/conversationReducer";
+import type { ConversationWsEvent } from "../conversation/types";
+
 export interface DeepgramStreamOptions {
   accessToken: string;
   channels: 1 | 2;
@@ -6,9 +9,13 @@ export interface DeepgramStreamOptions {
   endpointingMs?: number;
   baseUrl?: string;
   connectTimeoutMs?: number;
+  stopTimeoutMs?: number;
+  enableSoap?: boolean;
+  conversationId?: string;
   signal?: AbortSignal;
   onAuthOk?: (info: { expiresAt: number; sessionExpiresAt: number }) => void;
-  onTranscript: (event: DeepgramTranscriptEvent) => void;
+  onTranscript?: (event: DeepgramTranscriptEvent) => void;
+  onConversationEvent?: (event: ConversationWsEvent) => void;
   onError?: (error: Error) => void;
   onClose?: (event: { code: number; reason: string }) => void;
 }
@@ -79,12 +86,16 @@ export function buildDeepgramWebSocketUrl({
   sampleRate = 16000,
   endpointingMs = 300,
   baseUrl,
+  enableSoap = false,
+  conversationId,
 }: {
   channels: 1 | 2;
   language?: string;
   sampleRate?: number;
   endpointingMs?: number;
   baseUrl?: string;
+  enableSoap?: boolean;
+  conversationId?: string;
 }): string {
   const params = new URLSearchParams({
     channels: String(channels),
@@ -92,6 +103,12 @@ export function buildDeepgramWebSocketUrl({
     sample_rate: String(sampleRate),
     endpointing: String(endpointingMs),
   });
+  if (enableSoap) {
+    params.set("soap", "true");
+  }
+  if (conversationId?.trim()) {
+    params.set("conversation_id", conversationId.trim());
+  }
 
   const resolvedBase = resolveTranscriptionWsBaseUrl(baseUrl);
   return `${resolvedBase}/api/transcriptions/ws?${params.toString()}`;
@@ -191,8 +208,12 @@ export function createDeepgramStreamSession({
   endpointingMs = 300,
   baseUrl,
   connectTimeoutMs = 15000,
+  stopTimeoutMs,
+  enableSoap = false,
+  conversationId,
   onAuthOk,
   onTranscript,
+  onConversationEvent,
   onError,
   onClose,
   signal,
@@ -204,7 +225,16 @@ export function createDeepgramStreamSession({
     return Promise.reject(new DOMException("接続をキャンセルしました。", "AbortError"));
   }
 
-  const url = buildDeepgramWebSocketUrl({ channels, language, sampleRate, endpointingMs, baseUrl });
+  const url = buildDeepgramWebSocketUrl({
+    channels,
+    language,
+    sampleRate,
+    endpointingMs,
+    baseUrl,
+    enableSoap,
+    conversationId,
+  });
+  const effectiveStopTimeoutMs = stopTimeoutMs ?? (enableSoap ? 22000 : 6000);
   const socket = new WebSocket(url);
   socket.binaryType = "arraybuffer";
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
@@ -263,11 +293,11 @@ export function createDeepgramStreamSession({
         clearInterval(keepAliveTimer);
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "CloseStream" }));
-          // 中継側の最終結果待機（5秒）より長く待ち、応答しない接続も確実に解放する。
+          // 既定は STT 待機(6秒)、SOAP 有効時は STT 5秒 + LLM 最終更新 15秒 + 余裕 2秒(22秒)待つ
           closeTimer = setTimeout(() => {
             onError?.(new Error("文字起こしの最終結果の待機がタイムアウトしました。"));
             forceClose();
-          }, 6000);
+          }, effectiveStopTimeoutMs);
         } else forceClose();
         return closePromise;
       },
@@ -310,8 +340,14 @@ export function createDeepgramStreamSession({
         onError?.(new Error(errorMessage));
         return;
       }
+      const conversationEvent = parseConversationWsEvent(event.data);
+      if (conversationEvent) {
+        onConversationEvent?.(conversationEvent);
+        return;
+      }
+
       const parsed = parseDeepgramMessage(event.data);
-      if (parsed) onTranscript(parsed);
+      if (parsed) onTranscript?.(parsed);
     };
 
     socket.onerror = () => {
