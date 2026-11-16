@@ -1,8 +1,8 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
+import type { GaugeLabelDetails } from "@ui-sdk/react/progress";
 import {
-  type GaugeLabelDetails,
   ProgressIndicator,
   ProgressLabel,
   ProgressTrack,

@@ -1,7 +1,8 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { Fragment, type ReactNode, useId, useState } from "react";
+import type { ReactNode } from "react";
+import { Fragment, useId, useState } from "react";
 import { Badge, Button, Card } from "@/shared/ui";
 import { packageInsertEvidenceCardStyles as s } from "./PackageInsertEvidenceCard.styles";
 

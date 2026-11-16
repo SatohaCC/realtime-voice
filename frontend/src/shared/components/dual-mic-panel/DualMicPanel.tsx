@@ -1,16 +1,8 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import {
-  Badge,
-  type BadgeProps,
-  Banner,
-  Button,
-  Card,
-  Meter,
-  SegmentedControl,
-  Select,
-} from "@/shared/ui";
+import type { BadgeProps } from "@/shared/ui";
+import { Badge, Banner, Button, Card, Meter, SegmentedControl, Select } from "@/shared/ui";
 import { dualMicPanelStyles } from "./DualMicPanel.styles";
 
 export interface AudioDeviceOption {

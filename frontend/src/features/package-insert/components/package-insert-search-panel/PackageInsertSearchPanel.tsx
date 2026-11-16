@@ -1,12 +1,11 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { type FormEvent, useId, useState } from "react";
+import type { FormEvent } from "react";
+import { useId, useState } from "react";
 import { Badge, Banner, Button, Card, Checkbox, Chip, TextField } from "@/shared/ui";
-import {
-  PackageInsertEvidenceCard,
-  type PackageInsertEvidenceItem,
-} from "../package-insert-evidence-card";
+import type { PackageInsertEvidenceItem } from "../package-insert-evidence-card";
+import { PackageInsertEvidenceCard } from "../package-insert-evidence-card";
 import { packageInsertSearchPanelStyles as s } from "./PackageInsertSearchPanel.styles";
 
 export interface SearchMedicineOption {

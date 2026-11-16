@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { LoginCard, type LoginProviderOption } from "@/shared/components";
-import { type OAuthProviderName, signInWithOAuthProvider } from "@/shared/lib/supabase/client";
+import type { LoginProviderOption } from "@/shared/components";
+import { LoginCard } from "@/shared/components";
+import type { OAuthProviderName } from "@/shared/lib/supabase/client";
+import { signInWithOAuthProvider } from "@/shared/lib/supabase/client";
 import { GoogleSignInButton } from "@/shared/ui";
 
 const LOGIN_PROVIDERS: readonly LoginProviderOption[] = [

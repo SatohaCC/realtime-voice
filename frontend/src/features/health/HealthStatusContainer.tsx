@@ -1,7 +1,8 @@
 "use client";
 
 import { StatusCard } from "@/shared/components";
-import { type HealthResponse, useHealthStatus } from "./useHealthStatus";
+import type { HealthResponse } from "./useHealthStatus";
+import { useHealthStatus } from "./useHealthStatus";
 
 function toBadge(data: HealthResponse | null, error: string | null, isLoading: boolean) {
   if (isLoading) return { tone: "neutral" as const, text: "Checking..." };

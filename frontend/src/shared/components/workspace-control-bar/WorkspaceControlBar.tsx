@@ -2,16 +2,8 @@
 
 import * as stylex from "@stylexjs/stylex";
 import type { AudioDeviceOption, MicChannelView } from "@/shared/components/dual-mic-panel";
-import {
-  Badge,
-  type BadgeProps,
-  Banner,
-  Button,
-  Card,
-  Meter,
-  SegmentedControl,
-  Select,
-} from "@/shared/ui";
+import type { BadgeProps } from "@/shared/ui";
+import { Badge, Banner, Button, Card, Meter, SegmentedControl, Select } from "@/shared/ui";
 import { workspaceControlBarStyles as s } from "./WorkspaceControlBar.styles";
 
 export interface WorkspaceControlBarProps {

@@ -6,7 +6,7 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "biome check .",
+    "lint": "biome check --error-on-warnings .",
     "format": "biome check --write .",
     "test": "vitest run",
     "test:e2e": "playwright test",
@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "@babel/core": "^8.1.2",
-    "@biomejs/biome": "^2.6.7",
+    "@biomejs/biome": "2.6.7",
     "@playwright/test": "^1.65.0",
     "@storybook/nextjs-vite": "^10.6.7",
     "@stylexjs/babel-plugin": "^0.19.2",

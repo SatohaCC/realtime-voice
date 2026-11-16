@@ -1,7 +1,8 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { Fragment, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { Fragment } from "react";
 import { Banner, Button, Card } from "@/shared/ui";
 import { loginCardStyles as s } from "./LoginCard.styles";
 

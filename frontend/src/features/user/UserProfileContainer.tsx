@@ -3,10 +3,12 @@
 import * as stylex from "@stylexjs/stylex";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ComponentProps, useEffect, useState } from "react";
+import type { ComponentProps } from "react";
+import { useEffect, useState } from "react";
 import { useAudioInputDevices } from "@/features/audio/useAudioInputDevices";
 import { useSpeakerEnrollment } from "@/features/speaker/useSpeakerEnrollment";
-import { type AudioDeviceOption, SpeakerEnrollmentBar } from "@/shared/components";
+import type { AudioDeviceOption } from "@/shared/components";
+import { SpeakerEnrollmentBar } from "@/shared/components";
 import { subscribeAuthState } from "@/shared/lib/supabase/client";
 import { Badge, Banner, Button, Card, Select } from "@/shared/ui";
 import { userProfileContainerStyles as s } from "./UserProfileContainer.styles";

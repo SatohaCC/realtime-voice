@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { SoapPanel, type SoapPanelSectionView } from "./SoapPanel";
+import type { SoapPanelSectionView } from "./SoapPanel";
+import { SoapPanel } from "./SoapPanel";
 
 const TEST_SECTIONS: readonly SoapPanelSectionView[] = [
   {
