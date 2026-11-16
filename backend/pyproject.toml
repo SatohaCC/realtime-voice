@@ -8,8 +8,10 @@ dependencies = [
     "langchain>=1.0.0",
     "langchain-google-genai>=4.0.0",
     "numpy>=2.0.0",
+    "psycopg[binary]>=3.2,<4",
     "pyjwt[crypto]>=2.10.0",
     "sherpa-onnx>=2.0.0",
+    "sqlalchemy>=2.0,<3",
     "uvicorn[standard]>=0.32.0",
 ]
 

@@ -23,7 +23,7 @@ describe("AppHeader", () => {
     mocks.push.mockReset();
   });
 
-  it("ヘッダーにホーム・文字起こし・仕組み・ユーザーの4リンクを描画し、現在地を示す", () => {
+  it("ヘッダーにホーム・文字起こし・添付文書検索・XML取り込み・仕組み・ユーザーの6リンクを描画し、現在地を示す", () => {
     mocks.pathname = "/mechanism";
     render(<AppHeader initialAuthenticated={false} />);
 
@@ -32,6 +32,8 @@ describe("AppHeader", () => {
     expect(links.map((el) => el.textContent)).toEqual([
       "ホーム",
       "文字起こし",
+      "添付文書検索",
+      "XML取り込み",
       "仕組み",
       "ユーザー",
     ]);
@@ -40,6 +42,8 @@ describe("AppHeader", () => {
       "href",
       "/transcription",
     );
+    expect(screen.getByRole("link", { name: "添付文書検索" })).toHaveAttribute("href", "/search");
+    expect(screen.getByRole("link", { name: "XML取り込み" })).toHaveAttribute("href", "/imports");
     expect(screen.getByRole("link", { name: "仕組み" })).toHaveAttribute("href", "/mechanism");
     expect(screen.getByRole("link", { name: "ユーザー" })).toHaveAttribute("href", "/user");
     expect(screen.getByRole("link", { name: "仕組み" })).toHaveAttribute("aria-current", "page");

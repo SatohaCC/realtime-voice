@@ -44,6 +44,8 @@ describe("supabase auth config helpers", () => {
   it("許可したアプリ内パスだけを返し、外部URLや迂回記法を拒否する", () => {
     expect(sanitizeRedirectPath("/transcription")).toBe("/transcription");
     expect(sanitizeRedirectPath("/transcription?mode=dual")).toBe("/transcription?mode=dual");
+    expect(sanitizeRedirectPath("/search")).toBe("/search");
+    expect(sanitizeRedirectPath("/imports")).toBe("/imports");
     expect(sanitizeRedirectPath("/user")).toBe("/user");
     expect(sanitizeRedirectPath("/")).toBe("/");
     expect(sanitizeRedirectPath("https://evil.example/phish")).toBe("/transcription");
@@ -120,6 +122,28 @@ describe("handleAuthProxy", () => {
     expect(protectedUserRes.status).toBe(307);
     expect(protectedUserRes.headers.get("location")).toBe(
       "http://localhost:3000/login?next=%2Fuser",
+    );
+
+    const protectedSearchRes = await handleAuthProxy(
+      new NextRequest("http://localhost:3000/search", {
+        headers: { cookie: "sb-fake=tampered" },
+      }),
+      clientFactory,
+    );
+    expect(protectedSearchRes.status).toBe(307);
+    expect(protectedSearchRes.headers.get("location")).toBe(
+      "http://localhost:3000/login?next=%2Fsearch",
+    );
+
+    const protectedImportsRes = await handleAuthProxy(
+      new NextRequest("http://localhost:3000/imports", {
+        headers: { cookie: "sb-fake=tampered" },
+      }),
+      clientFactory,
+    );
+    expect(protectedImportsRes.status).toBe(307);
+    expect(protectedImportsRes.headers.get("location")).toBe(
+      "http://localhost:3000/login?next=%2Fimports",
     );
 
     const publicRes = await handleAuthProxy(

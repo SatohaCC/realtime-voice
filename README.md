@@ -51,6 +51,7 @@ Backend の `CORS_ORIGINS` は、許可する Origin をカンマ区切りで指
   - `TRANSCRIPTION_MAX_SESSION_SECONDS`: 1 回の文字起こし WebSocket セッション上限（既定 `240` 秒。Vercel 実行時間上限より短く設定）
   - `SOAP_LLM_PROVIDER` / `SOAP_LLM_MODEL` / `SOAP_LLM_FINALIZE_MODEL` / `SOAP_LLM_THINKING_BUDGET` / `SOAP_LLM_MAX_TOKENS` / `SOAP_LLM_TIMEOUT_SECONDS` / `GOOGLE_API_KEY`: リアルタイム SOAP 生成用 LLM 設定（既定は `google_genai`、既定モデル `gemini-3.5-flash-lite`、思考トークン予算既定 `0`。無効化時は `off` または `none` を指定）
   - `SOAP_MIN_INTERVAL_SECONDS` / `SOAP_MAX_BATCH_WAIT_SECONDS`: リアルタイム SOAP 抽出バッチ間隔（既定 `12.0` 秒）
+  - `DATABASE_URL`（任意）: 添付文書データ保存先の PostgreSQL URL（Supabase PostgreSQL 等。未設定時はインメモリストアで動作）
 
 新規登録を禁止し事前招待ユーザーのみ許可する運用では、Supabase Dashboard の `Authentication > Sign In / Providers`（または `User Signups`）で **Allow new users to sign up** を OFF に設定してください。利用者を追加する際は `Authentication > Users` から対象 Google アカウントのメールアドレスを事前登録（`Invite user`、または `Create new user` で `Auto Confirm User` を有効化して作成）します。事前登録されたメールアドレスの Google アカウントのみ OAuth ログインが許可され、未登録アカウントはログイン画面で拒否案内が表示されます。
 

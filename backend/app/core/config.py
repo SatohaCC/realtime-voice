@@ -311,6 +311,9 @@ class Settings:
             os.getenv("SPEAKER_ENROLLMENT_MAX_BYTES"), default=16000 * 2 * 30
         )
     )
+    database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", "").strip())
+    package_insert_max_bytes: int = 10 * 1024 * 1024
+    package_insert_chunk_bytes: int = 3 * 1024 * 1024
     transcription_protocol_version: int = 1
 
 
