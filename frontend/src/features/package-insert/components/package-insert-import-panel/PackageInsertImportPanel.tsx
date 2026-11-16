@@ -1,8 +1,8 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { type ChangeEvent, type FormEvent, useId, useRef } from "react";
-import { Badge, Banner, Button, Card } from "@/shared/ui";
+import type { FormEvent } from "react";
+import { Badge, Banner, Button, Card, FileTrigger } from "@/shared/ui";
 import { packageInsertImportPanelStyles as s } from "./PackageInsertImportPanel.styles";
 
 export interface ImportedProductView {
@@ -106,14 +106,6 @@ export function PackageInsertImportPanel({
   onRefreshHistory,
   onChangeHistoryOffset,
 }: PackageInsertImportPanelProps) {
-  const fileInputId = useId();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] ?? null;
-    onSelectFile(file);
-  };
-
   const handleFormSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedFileName || isSubmitting) return;
@@ -138,23 +130,13 @@ export function PackageInsertImportPanel({
 
       <Card as="section" variant="outlined" style={s.uploadCard} aria-label="XMLアップロード">
         <form onSubmit={handleFormSubmit} {...stylex.props(s.formRow)}>
-          <input
-            id={fileInputId}
-            ref={fileInputRef}
-            type="file"
+          <FileTrigger
+            label="XMLファイルを選択"
             accept=".xml,application/xml,text/xml"
             disabled={isSubmitting}
-            aria-label="XMLファイルを選択"
-            onChange={handleFileChange}
-            {...stylex.props(s.visuallyHiddenInput)}
-          />
-          <Button
             variant="outlined"
-            disabled={isSubmitting}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            XMLファイルを選択
-          </Button>
+            onSelectFile={onSelectFile}
+          />
           <Button type="submit" variant="filled" disabled={!selectedFileName || isSubmitting}>
             {isSubmitting ? "登録中…" : "XMLを登録"}
           </Button>

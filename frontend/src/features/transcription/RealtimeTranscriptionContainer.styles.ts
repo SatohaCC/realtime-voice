@@ -33,12 +33,6 @@ export const realtimeTranscriptionContainerStyles = stylex.create({
     borderRadius: tokens.cornerFull,
     borderWidth: 0,
     backgroundColor: "transparent",
-    backgroundImage: {
-      default: "none",
-      ":focus-visible": tokens.stateFocus,
-      "@media (hover: hover)": { ":hover": tokens.stateHover },
-      ":active": tokens.statePress,
-    },
     color: tokens.onSurfaceVariant,
     fontSize: "0.875rem",
     fontWeight: 600,

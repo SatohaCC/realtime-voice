@@ -167,12 +167,6 @@ export const soapPanelStyles = stylex.create({
     borderStyle: "solid",
     borderColor: tokens.outline,
     backgroundColor: tokens.surfaceContainerLowest,
-    backgroundImage: {
-      default: "none",
-      ":focus-visible": tokens.stateFocus,
-      "@media (hover: hover)": { ":hover": tokens.stateHover },
-      ":active": tokens.statePress,
-    },
     color: tokens.primary,
     fontSize: "0.75rem",
     lineHeight: 1.4,

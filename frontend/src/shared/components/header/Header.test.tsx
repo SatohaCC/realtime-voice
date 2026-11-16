@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { Button } from "@/shared/ui";
 import { Header } from "./Header";
 
 describe("Header", () => {
@@ -14,7 +15,7 @@ describe("Header", () => {
           { href: "/", label: "ホーム", isCurrent: true },
           { href: "/#connection", label: "接続状態" },
         ]}
-        actions={<button type="button">セッション開始</button>}
+        actions={<Button type="button">セッション開始</Button>}
       />,
     );
 

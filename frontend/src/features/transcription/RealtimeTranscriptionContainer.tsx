@@ -20,7 +20,7 @@ import type {
   SoapSectionKey,
   SpeakerRole,
 } from "@/shared/lib/conversation/types";
-import { Badge, type BadgeProps } from "@/shared/ui";
+import { Badge, type BadgeProps, Button } from "@/shared/ui";
 import { realtimeTranscriptionContainerStyles as s } from "./RealtimeTranscriptionContainer.styles";
 import { useRealtimeTranscription } from "./useRealtimeTranscription";
 
@@ -61,29 +61,26 @@ export function TranscriptionWorkspaceView({
       <WorkspaceControlBar {...controlBar} />
 
       <div role="tablist" aria-label="作業画面の切り替え" {...stylex.props(s.mobileTabsWrap)}>
-        <button
-          type="button"
+        <Button
+          variant="text"
           role="tab"
           aria-selected={mobilePane === "transcript"}
           onClick={() => onMobilePaneChange("transcript")}
-          {...stylex.props(
-            s.mobileTabButton,
-            mobilePane === "transcript" && s.mobileTabButtonActive,
-          )}
+          style={[s.mobileTabButton, mobilePane === "transcript" && s.mobileTabButtonActive]}
         >
           文字起こし
           <Badge tone="neutral">{`${transcriptCount}`}</Badge>
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="text"
           role="tab"
           aria-selected={mobilePane === "soap"}
           onClick={() => onMobilePaneChange("soap")}
-          {...stylex.props(s.mobileTabButton, mobilePane === "soap" && s.mobileTabButtonActive)}
+          style={[s.mobileTabButton, mobilePane === "soap" && s.mobileTabButtonActive]}
         >
           SOAP
           <Badge tone={soapBadgeTone}>{`${soapItemCount}`}</Badge>
-        </button>
+        </Button>
       </div>
 
       <div {...stylex.props(s.workspaceGrid)}>
