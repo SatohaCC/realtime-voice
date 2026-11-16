@@ -158,14 +158,14 @@ sha256 = "7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2"
 
 [[packages]]
 name = "fastapi"
-version = "0.163.0"
+version = "0.163.1"
 
 [[packages.wheels]]
-name = "fastapi-0.163.0-py3-none-any.whl"
-url = "https://files.pythonhosted.org/packages/de/b0/2d68e967b2fc6012ef1e7e91253c8222a2a895a45dee3677562deb93987e/fastapi-0.163.0-py3-none-any.whl"
+name = "fastapi-0.163.1-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/20/b6/2424da1e40825d3fc54539621811f34e21472499677c9490e4967270e38e/fastapi-0.163.1-py3-none-any.whl"
 
 [packages.wheels.hashes]
-sha256 = "7572550ab4935e3ff373dc0191aea410d6c48127cc5477bc290b992fe539e345"
+sha256 = "68f2d8050f5c3583121c0d203046cc7def5c16a7d6c43a0e7707a8ea610fe2d3"
 
 [[packages]]
 name = "filetype"
@@ -242,14 +242,14 @@ sha256 = "2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55"
 
 [[packages]]
 name = "httpcore2"
-version = "2.16.0"
+version = "2.16.2"
 
 [[packages.wheels]]
-name = "httpcore2-2.16.0-py3-none-any.whl"
-url = "https://files.pythonhosted.org/packages/af/c2/ce417c397afa5181f0e3c6ff01a4d01639414e1adef08730d97571297151/httpcore2-2.16.0-py3-none-any.whl"
+name = "httpcore2-2.16.2-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/2a/e8/009c347feac27f8960605aa98d55ed263b5870dd4fd80b82fd1d00d5716c/httpcore2-2.16.2-py3-none-any.whl"
 
 [packages.wheels.hashes]
-sha256 = "5c4358319f2602d984ad93182c9fee5160f22e9da7babdda870a5e7c4e2dc34f"
+sha256 = "16051ae2a42f776007543f32de9349a317b23d2cbb4e1456b4bac0e88b87419a"
 
 [[packages]]
 name = "httptools"
@@ -282,14 +282,14 @@ sha256 = "d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad"
 
 [[packages]]
 name = "httpx2"
-version = "2.16.0"
+version = "2.16.2"
 
 [[packages.wheels]]
-name = "httpx2-2.16.0-py3-none-any.whl"
-url = "https://files.pythonhosted.org/packages/7b/3d/2e4bc4fd1ef9770871669adb348d612a6e4786b303a23f9935b81c48dd60/httpx2-2.16.0-py3-none-any.whl"
+name = "httpx2-2.16.2-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/77/de/8c4306a3d6aa2495111986addf33a9e561eff4c47552e4c4b9251160d0ad/httpx2-2.16.2-py3-none-any.whl"
 
 [packages.wheels.hashes]
-sha256 = "fd2c5d7909e8d86fe92d53020c310ca0e4e431b838c207c5754b9bbf0308d49a"
+sha256 = "f05c13aade4c45dbf1c9060647a1058f0acad62398fad96e741269edb33d46f5"
 
 [[packages]]
 name = "idna"
@@ -359,14 +359,14 @@ sha256 = "24e94c496a3e532be1f9541edb475d5d0975aeb1211c3f8fecc042da3ec44cfa"
 
 [[packages]]
 name = "langchain-core"
-version = "1.8.0"
+version = "1.8.1"
 
 [[packages.wheels]]
-name = "langchain_core-1.8.0-py3-none-any.whl"
-url = "https://files.pythonhosted.org/packages/2f/1a/39e377548fdbe63f5956ed88a53c6f22070f4cf5f484ccdfebad9538503f/langchain_core-1.8.0-py3-none-any.whl"
+name = "langchain_core-1.8.1-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/02/5b/fc60734441d0d9816e10598bb71a5a322494b4e3d393e75b37af0578b327/langchain_core-1.8.1-py3-none-any.whl"
 
 [packages.wheels.hashes]
-sha256 = "89732f9e7d311de9913ba22caf921c72520145a829f05ec1d9c85013e904213c"
+sha256 = "e093de87371e648af23517f1e98cefc316f8be7c72a137b0e0f94d3e8e8cc421"
 
 [[packages]]
 name = "langchain-google-genai"
@@ -516,21 +516,21 @@ sha256 = "993e7a20aa5671eb41a7132cf555af30062da99729601601b9a8382b11cae768"
 
 [[packages]]
 name = "numpy"
-version = "2.5.4"
+version = "2.5.5"
 
 [[packages.wheels]]
-name = "numpy-2.5.4-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
-url = "https://files.pythonhosted.org/packages/16/d5/928078d2b28f26829b138b4a6c3980045022fb409f570657a224ae60ef4e/numpy-2.5.4-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+name = "numpy-2.5.5-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/a4/1f/fcdce1061fba2bfb2e9bfda01fbd8132d5f7522a4f7c8e2b2f629d54ee38/numpy-2.5.5-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
 
 [packages.wheels.hashes]
-sha256 = "d549420b8858885cea8838a727842249218b9c1da24dd517e25c9c7a948310a3"
+sha256 = "c48960d420e90cf305cb1fde0d4e6082cc90512cda87a9acf0b6e04e91cf4abe"
 
 [[packages.wheels]]
-name = "numpy-2.5.4-cp314-cp314-win_amd64.whl"
-url = "https://files.pythonhosted.org/packages/52/9a/e1e512ebc948d5b9dd33b08736760f0ebbed2848fd4eda1f553088a6dcee/numpy-2.5.4-cp314-cp314-win_amd64.whl"
+name = "numpy-2.5.5-cp314-cp314-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/74/e2/494516771374b43060c1b778b371cba53d576abd3aee1275eecd73896e3b/numpy-2.5.5-cp314-cp314-win_amd64.whl"
 
 [packages.wheels.hashes]
-sha256 = "2ca144f15135b6212a5c47b1e2aeca6e412f102f95a2d5d88d8aec77eb255de3"
+sha256 = "20145b11776d2f7570cd61351b156a51d3a341822282095baa819d87272bc710"
 
 [[packages]]
 name = "opentelemetry-api"
@@ -611,6 +611,35 @@ url = "https://files.pythonhosted.org/packages/40/9e/2b38731e0fc536806f16490e1a1
 
 [packages.wheels.hashes]
 sha256 = "7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec"
+
+[[packages]]
+name = "psycopg"
+version = "3.3.9"
+
+[[packages.wheels]]
+name = "psycopg-3.3.9-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/52/5d/a7957d1b5484f8e5094a15b1a400929324f978b670bd4a95179e1a012ec2/psycopg-3.3.9-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "d2d7d04a1ce6dab4f5b27316bea3b52585cafa2f2d631e5b09dd69823f5c26f6"
+
+[[packages]]
+name = "psycopg-binary"
+version = "3.3.9"
+
+[[packages.wheels]]
+name = "psycopg_binary-3.3.9-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/2a/d5/ba4839c38d9d35daa815cb18dfe462582f783ba83b9d932692bb903fba01/psycopg_binary-3.3.9-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+
+[packages.wheels.hashes]
+sha256 = "4992acd5a7479013d52615b8c23fdce9bc22f3cacbfb1007fa474e6b5ebe94c7"
+
+[[packages.wheels]]
+name = "psycopg_binary-3.3.9-cp314-cp314-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/4e/50/643d5f523fa77a3b808e982716e7aa76da788218e40942721939c5e08c11/psycopg_binary-3.3.9-cp314-cp314-win_amd64.whl"
+
+[packages.wheels.hashes]
+sha256 = "109c5df5b0e5117e01a42d3b56a2f4ccd5431bd54d25efdfc89df095ac9f9605"
 
 [[packages]]
 name = "pyasn1"
@@ -835,6 +864,24 @@ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f
 sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2"
 
 [[packages]]
+name = "sqlalchemy"
+version = "2.1.8"
+
+[[packages.wheels]]
+name = "sqlalchemy-2.1.8-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/a5/7a/471d5a50c82102f12cf7a95501e42ff8584b5cb30b16e5413584264a518c/sqlalchemy-2.1.8-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+
+[packages.wheels.hashes]
+sha256 = "9587623885c13b7c53354fa39a5edc7cf5388dec708e4e6d04e7b6868941a2c6"
+
+[[packages.wheels]]
+name = "sqlalchemy-2.1.8-cp314-cp314-win_amd64.whl"
+url = "https://files.pythonhosted.org/packages/66/b6/4bfee0e40608186f28ac6dc69120189b5e163a297bf71bfb86aa97b789e8/sqlalchemy-2.1.8-cp314-cp314-win_amd64.whl"
+
+[packages.wheels.hashes]
+sha256 = "4b8c3559fb4382136a45b12a9546055781bcc5898a6b223ae8bd9d873c210df1"
+
+[[packages]]
 name = "starlette"
 version = "1.10.0"
 
@@ -888,6 +935,18 @@ url = "https://files.pythonhosted.org/packages/de/0c/ea2544850a7c135e15033a5c7a8
 
 [packages.wheels.hashes]
 sha256 = "bc210535442b39e1bf2805e0c7a17dfd6a4ace760c84c7f7d16245d23a6b1c39"
+
+[[packages]]
+name = "tzdata"
+version = "2026.6"
+marker = "python_full_version == '3.14.*' and implementation_name == 'cpython' and platform_machine == 'AMD64' and platform_python_implementation == 'CPython' and platform_system == 'Windows' and sys_platform == 'win32'"
+
+[[packages.wheels]]
+name = "tzdata-2026.6-py2.py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/0a/66/9a06c2227fedfd4919f0eaaa8b94377d9730882a7e4f95823c9a331ab5e1/tzdata-2026.6-py2.py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec"
 
 [[packages]]
 name = "urllib3"
@@ -1022,10 +1081,12 @@ requirements = [
     "langchain>=1.0.0",
     "mypy>=1.14.0",
     "numpy>=2.0.0",
+    "psycopg[binary]>=3.2,<4",
     "pyjwt[crypto]>=2.10.0",
     "pytest>=8.3.0",
     "ruff>=0.8.0",
     "sherpa-onnx>=2.0.0",
+    "sqlalchemy>=2.0,<3",
     "uvicorn[standard]>=0.32.0",
 ]
 platforms = [

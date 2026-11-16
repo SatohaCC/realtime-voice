@@ -12,6 +12,12 @@ test("トップページは公開維持され、保護された文字起こし�
     "リアルタイム文字起こし・SOAP 自動生成の仕組み",
   );
 
+  await page.goto("/search");
+  await expect(page).toHaveURL(/\/login\?next=%2Fsearch/);
+
+  await page.goto("/imports");
+  await expect(page).toHaveURL(/\/login\?next=%2Fimports/);
+
   await page.goto("/transcription");
   await expect(page).toHaveURL(/\/login\?next=%2Ftranscription/);
   await expect(page.getByRole("heading", { name: "ログイン" })).toBeVisible();

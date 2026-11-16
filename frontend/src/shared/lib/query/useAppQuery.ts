@@ -1,6 +1,7 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
 
 export interface AppQueryOptions<TData> {
   queryKey: readonly unknown[];
@@ -23,4 +24,17 @@ export function useAppQuery<TData>({ queryKey, queryFn, enabled }: AppQueryOptio
       void refetch();
     },
   };
+}
+
+/**
+ * 指定したキープレフィックスに一致するクエリキャッシュを無効化するコールバックを返す。
+ */
+export function useInvalidateAppQueries() {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (queryKey: readonly unknown[]) => {
+      void queryClient.invalidateQueries({ queryKey });
+    },
+    [queryClient],
+  );
 }

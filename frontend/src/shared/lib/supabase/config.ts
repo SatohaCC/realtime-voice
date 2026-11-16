@@ -3,7 +3,7 @@ export interface SupabasePublicConfig {
   publishableKey: string;
 }
 
-const ALLOWED_REDIRECT_PATHS = new Set(["/", "/transcription", "/user"]);
+const ALLOWED_REDIRECT_PATHS = new Set(["/", "/transcription", "/search", "/imports", "/user"]);
 
 /**
  * Supabase の公開設定（URL と Publishable Key）を取得する。未設定時は null を返す。

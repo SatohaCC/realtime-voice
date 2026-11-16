@@ -40,6 +40,16 @@ export function AppHeader({ initialAuthenticated = false }: AppHeaderProps) {
   const navItems: HeaderNavItem[] = [
     { href: "/", label: "ホーム", isCurrent: pathname === "/" },
     { href: "/transcription", label: "文字起こし", isCurrent: pathname === "/transcription" },
+    {
+      href: "/search",
+      label: "添付文書検索",
+      isCurrent: pathname === "/search" || pathname.startsWith("/search/"),
+    },
+    {
+      href: "/imports",
+      label: "XML取り込み",
+      isCurrent: pathname === "/imports" || pathname.startsWith("/imports/"),
+    },
     { href: "/mechanism", label: "仕組み", isCurrent: pathname === "/mechanism" },
     {
       href: "/user",
