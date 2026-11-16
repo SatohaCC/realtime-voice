@@ -50,17 +50,6 @@ export const packageInsertImportPanelStyles = stylex.create({
     alignItems: "center",
     gap: "0.75rem",
   },
-  visuallyHiddenInput: {
-    position: "absolute",
-    width: "1px",
-    height: "1px",
-    padding: 0,
-    margin: "-1px",
-    overflow: "hidden",
-    clip: "rect(0, 0, 0, 0)",
-    whiteSpace: "nowrap",
-    borderWidth: 0,
-  },
   selectedFileBox: {
     display: "flex",
     flexWrap: "wrap",

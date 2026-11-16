@@ -160,24 +160,26 @@ export function SoapPanel({
                         ))}
 
                         {singleEvidence ? (
-                          <button
-                            type="button"
+                          <Button
+                            variant="text"
+                            size="sm"
                             onClick={() =>
                               onSelectEvidence(singleEvidence.streamId, singleEvidence.segmentId)
                             }
-                            {...stylex.props(s.evidenceButton)}
+                            style={s.evidenceButton}
                           >
                             {`${singleEvidencePrefix}: ${singleEvidence.speakerLabel}「${singleEvidence.quote}」`}
-                          </button>
+                          </Button>
                         ) : item.evidences.length > 1 ? (
-                          <button
-                            type="button"
+                          <Button
+                            variant="text"
+                            size="sm"
                             aria-expanded={isExpanded}
                             onClick={() => toggleExpanded(item.itemId)}
-                            {...stylex.props(s.evidenceButton)}
+                            style={s.evidenceButton}
                           >
                             {multipleEvidenceLabel(item.evidences.length)}
-                          </button>
+                          </Button>
                         ) : null}
                       </div>
 
@@ -185,13 +187,14 @@ export function SoapPanel({
                         <ul {...stylex.props(s.evidenceDrawerList)}>
                           {item.evidences.map((ev) => (
                             <li key={`${item.itemId}:${ev.streamId}:${ev.segmentId}`}>
-                              <button
-                                type="button"
+                              <Button
+                                variant="text"
+                                size="sm"
                                 onClick={() => onSelectEvidence(ev.streamId, ev.segmentId)}
-                                {...stylex.props(s.evidenceButton)}
+                                style={s.evidenceButton}
                               >
                                 {`${ev.speakerLabel}「${ev.quote}」`}
-                              </button>
+                              </Button>
                             </li>
                           ))}
                         </ul>

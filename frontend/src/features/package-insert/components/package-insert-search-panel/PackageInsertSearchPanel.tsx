@@ -2,7 +2,7 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { type FormEvent, useId, useState } from "react";
-import { Badge, Banner, Button, Card } from "@/shared/ui";
+import { Badge, Banner, Button, Card, Checkbox, Chip, TextField } from "@/shared/ui";
 import {
   PackageInsertEvidenceCard,
   type PackageInsertEvidenceItem,
@@ -111,15 +111,15 @@ export function PackageInsertSearchPanel({
             検索キーワード
           </label>
           <div {...stylex.props(s.searchRow)}>
-            <input
+            <TextField
               id={inputId}
               type="search"
               value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
+              onChange={onQueryChange}
               disabled={isSearching}
               aria-describedby={helpId}
               placeholder="キーワードを入力（例: 悪心 併用禁忌）"
-              {...stylex.props(s.searchInput)}
+              style={s.searchInput}
             />
             <Button type="submit" variant="filled" disabled={isSearching || !query.trim()}>
               {isSearching ? "検索中…" : "検索"}
@@ -130,30 +130,17 @@ export function PackageInsertSearchPanel({
             <span {...stylex.props(s.exampleLabel)}>例を選ぶと検索欄に入力されます:</span>
             <div {...stylex.props(s.chipGroup)}>
               {queryExamples.map((example) => (
-                <button
-                  key={example}
-                  type="button"
-                  disabled={isSearching}
-                  onClick={() => onQueryChange(example)}
-                  {...stylex.props(s.chip)}
-                >
+                <Chip key={example} disabled={isSearching} onClick={() => onQueryChange(example)}>
                   {example}
-                </button>
+                </Chip>
               ))}
             </div>
           </div>
 
           <div {...stylex.props(s.expandOptionRow)}>
-            <label {...stylex.props(s.checkboxLabel)}>
-              <input
-                type="checkbox"
-                checked={isExpandEnabled}
-                onChange={(event) => onExpansionChange(event.target.checked)}
-                disabled={isSearching}
-                {...stylex.props(s.checkboxInput)}
-              />
-              <span>関連する表現も検索（類義語拡張）</span>
-            </label>
+            <Checkbox checked={isExpandEnabled} onChange={onExpansionChange} disabled={isSearching}>
+              関連する表現も検索（類義語拡張）
+            </Checkbox>
             <p {...stylex.props(s.noteText)}>
               例: 「吐き気」と入力すると「悪心」「嘔吐」なども検索対象に含めます。
             </p>
@@ -191,15 +178,14 @@ export function PackageInsertSearchPanel({
                 {medicineOptions.map((option) => {
                   const selected = selectedMedicineIds.includes(option.id);
                   return (
-                    <button
+                    <Chip
                       key={option.id}
-                      type="button"
+                      selected={selected}
                       aria-pressed={selected}
                       onClick={() => onToggleMedicine(option.id)}
-                      {...stylex.props(s.chip, selected && s.chipSelected)}
                     >
                       {option.label}
-                    </button>
+                    </Chip>
                   );
                 })}
               </div>
@@ -244,26 +230,24 @@ export function PackageInsertSearchPanel({
           {sectionGroups.length > 1 ? (
             <div {...stylex.props(s.sectionFilterRow)}>
               <span {...stylex.props(s.sectionFilterLabel)}>セクション別:</span>
-              <button
-                type="button"
+              <Chip
+                selected={selectedSection === "all"}
                 aria-pressed={selectedSection === "all"}
                 onClick={() => onSelectSection("all")}
-                {...stylex.props(s.chip, selectedSection === "all" && s.chipSelected)}
               >
                 すべて ({totalCount})
-              </button>
+              </Chip>
               {sectionGroups.map((group) => {
                 const isSelected = selectedSection === group.code;
                 return (
-                  <button
+                  <Chip
                     key={group.code}
-                    type="button"
+                    selected={isSelected}
                     aria-pressed={isSelected}
                     onClick={() => onSelectSection(isSelected ? "all" : group.code)}
-                    {...stylex.props(s.chip, isSelected && s.chipSelected)}
                   >
                     [{group.code}] {group.title} ({group.count})
-                  </button>
+                  </Chip>
                 );
               })}
             </div>

@@ -111,6 +111,26 @@
           }
         }
       }
+    },
+    {
+      "includes": ["src/shared/components/**", "src/features/**", "src/app/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noRestrictedElements": {
+              "level": "error",
+              "options": {
+                "elements": {
+                  "button": "生の <button> は使用せず、@/shared/ui の Button / Chip / FileTrigger を使用してください。",
+                  "input": "生の <input> は使用せず、@/shared/ui の TextField / Checkbox / FileTrigger を使用してください。",
+                  "select": "生の <select> は使用せず、@/shared/ui のコンポーネントを使用してください。",
+                  "textarea": "生の <textarea> は使用せず、@/shared/ui のコンポーネントを使用してください。"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }
