@@ -75,7 +75,7 @@ Backend の `CORS_ORIGINS` は、許可する Origin をカンマ区切りで指
 
 ## コマンド
 
-バージョン管理はGit共存モードのJujutsu（`jj`）を使います。作業手順は [Jujutsuのルール](.agents/rules/vcs.md) を参照してください。`jj` のコミット前はGitフックに頼らず `pnpm check` と必要なテストを実行します。
+バージョン管理は Git を使います。作業手順は [バージョン管理ルール](.agents/rules/vcs.md) を参照してください。コミット前は `pnpm check` と必要なテストを実行します。
 
 | コマンド | 内容 |
 |---|---|
