@@ -8,6 +8,7 @@ frontend/.next/
 frontend/out/
 .vercel/
 *.tsbuildinfo
+frontend/next-env.d.ts
 
 # Python bytecode (fallback if run outside scripts)
 **/__pycache__/

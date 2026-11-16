@@ -20,6 +20,38 @@ function createPrivateRedirect(
 }
 
 /**
+ * エラーコードやメッセージが新規サインアップ無効化による拒否かを判定する。
+ */
+function isSignupDisabledError(
+  rawCode: string | null | undefined,
+  rawMessage: string | null | undefined,
+): boolean {
+  const code = rawCode?.trim().toLowerCase() ?? "";
+  if (code === "signup_disabled" || code === "user_not_found") {
+    return true;
+  }
+  const message = rawMessage?.trim().toLowerCase() ?? "";
+  return message.includes("signups not allowed");
+}
+
+/**
+ * OAuth コールバックのクエリパラメータが新規サインアップ無効化による拒否かを判定する。
+ */
+function isSignupDisabledQuery(searchParams: URLSearchParams): boolean {
+  return isSignupDisabledError(
+    searchParams.get("error_code"),
+    searchParams.get("error_description"),
+  );
+}
+
+/**
+ * コード交換時のエラーが新規サインアップ無効化による拒否かを判定する。
+ */
+function isSignupDisabledAuthError(error: { code?: string; message?: string }): boolean {
+  return isSignupDisabledError(error.code, error.message);
+}
+
+/**
  * OAuth コールバックの PKCE コードを Cookie セッションへ交換する Route Handler。
  */
 export async function GET(request: NextRequest) {
@@ -27,10 +59,13 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const nextPath = sanitizeRedirectPath(searchParams.get("next"));
 
-  const oauthError = searchParams.get("error");
+  const oauthError = searchParams.get("error") ?? searchParams.get("error_code");
   if (oauthError) {
     const loginUrl = new URL("/login", trustedOrigin);
-    loginUrl.searchParams.set("error", "oauth_denied");
+    loginUrl.searchParams.set(
+      "error",
+      isSignupDisabledQuery(searchParams) ? "signup_disabled" : "oauth_denied",
+    );
     loginUrl.searchParams.set("next", nextPath);
     return createPrivateRedirect(loginUrl);
   }
@@ -63,7 +98,10 @@ export async function GET(request: NextRequest) {
   const { error } = await supabase.auth.exchangeCodeForSession(code);
   if (error) {
     const loginUrl = new URL("/login", trustedOrigin);
-    loginUrl.searchParams.set("error", "auth_callback_failed");
+    loginUrl.searchParams.set(
+      "error",
+      isSignupDisabledAuthError(error) ? "signup_disabled" : "auth_callback_failed",
+    );
     loginUrl.searchParams.set("next", nextPath);
     return createPrivateRedirect(loginUrl, pendingCookies);
   }

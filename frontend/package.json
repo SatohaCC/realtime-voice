@@ -13,7 +13,7 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build -o ../.cache/storybook-static",
     "test:storybook": "pnpm build-storybook && playwright test --config playwright.storybook.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
     "@stylexjs/stylex": "^0.19.2",

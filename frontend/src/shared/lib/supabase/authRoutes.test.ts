@@ -181,6 +181,37 @@ describe("OAuth callback and logout route handlers", () => {
     expect(okRes.status).toBe(307);
     expect(okRes.headers.get("location")).toBe("https://app.example.com/transcription");
     expect(okRes.cookies.get("sb-session")?.value).toBe("new-cookie");
+
+    const signupDisabledQueryRes = await GET(
+      new NextRequest(
+        "https://app.example.com/auth/callback?error=access_denied&error_code=signup_disabled&error_description=Signups+not+allowed+for+this+instance&next=/transcription",
+      ),
+    );
+    expect(signupDisabledQueryRes.status).toBe(307);
+    expect(signupDisabledQueryRes.headers.get("location")).toBe(
+      "https://app.example.com/login?error=signup_disabled&next=%2Ftranscription",
+    );
+
+    const oauthDeniedRes = await GET(
+      new NextRequest(
+        "https://app.example.com/auth/callback?error=access_denied&next=/transcription",
+      ),
+    );
+    expect(oauthDeniedRes.status).toBe(307);
+    expect(oauthDeniedRes.headers.get("location")).toBe(
+      "https://app.example.com/login?error=oauth_denied&next=%2Ftranscription",
+    );
+
+    mocks.exchangeCodeForSession.mockResolvedValueOnce({
+      error: { code: "signup_disabled", message: "Signups not allowed for this instance" },
+    });
+    const signupDisabledExchangeRes = await GET(
+      new NextRequest("https://app.example.com/auth/callback?code=pkce-code&next=/transcription"),
+    );
+    expect(signupDisabledExchangeRes.status).toBe(307);
+    expect(signupDisabledExchangeRes.headers.get("location")).toBe(
+      "https://app.example.com/login?error=signup_disabled&next=%2Ftranscription",
+    );
   });
 
   it("logout は Origin を検証した POST のみ受け付け、セッション Cookie を破棄する", async () => {
