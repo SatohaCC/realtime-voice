@@ -1,6 +1,3 @@
-# VCS
-.jj/
-
 # Dependencies
 node_modules/
 backend/.venv

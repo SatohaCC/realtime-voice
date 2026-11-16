@@ -2,7 +2,7 @@
 
 このリポジトリで作業するときは、対象に応じて以下の規約を読む。
 
-- バージョン管理: [.agents/rules/vcs.md](.agents/rules/vcs.md)。Git共存モードのJujutsu（`jj`）を優先する。
+- バージョン管理: [.agents/rules/vcs.md](.agents/rules/vcs.md)。Git で管理する。
 - コメント・docstring: [.agents/rules/coding-style.md](.agents/rules/coding-style.md)
 - Backend: [.agents/rules/backend-architecture.md](.agents/rules/backend-architecture.md)
 - Frontendの共有UI: [.agents/rules/frontend-shared-ui.md](.agents/rules/frontend-shared-ui.md)
