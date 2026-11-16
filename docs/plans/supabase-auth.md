@@ -29,7 +29,7 @@
 ## Phase 0: 外部設定と接続条件の準備
 
 1. Supabaseプロジェクトと現在の署名方式を確認する。JWKSによる検証の前提をES256 / RS256の非対称鍵に固定し、HS256を無言で許可しない。
-2. Googleを有効化し、プロバイダのコールバックにはSupabaseの `/auth/v1/callback` を登録する。
+2. Googleを有効化し、プロバイダのコールバックにはSupabaseの `/auth/v1/callback` を登録する。また、`Authentication > Sign In / Providers`（または `User Signups`）で **Allow new users to sign up** を無効化し、管理者が `Authentication > Users` から事前招待・登録したメールアドレスのみログインを許可する運用とする。
 3. SupabaseのRedirect URLsにはローカル・本番・運用するPreviewの `/auth/callback` を登録する。Previewを許可する範囲はチームの管理対象に限定する。
 4. `.env.example` とREADMEに以下を記載する。実値や秘密情報はコミットしない。
    - Frontend: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`

@@ -11,6 +11,8 @@ const LOGIN_PROVIDERS: readonly LoginProviderOption[] = [
 
 const ERROR_MESSAGES: Record<string, string> = {
   oauth_denied: "認証がキャンセルされたか拒否されました。再度お試しください。",
+  signup_disabled:
+    "このアカウントは登録されていません。新規登録は制限されているため、管理者による招待が必要です。",
   missing_code: "認証コードが見つかりませんでした。もう一度ログインしてください。",
   auth_callback_failed: "ログイン処理の完了に失敗しました。時間をおいて再度お試しください。",
   auth_not_configured: "認証設定が構成されていません。管理者へお問い合わせください。",
@@ -58,7 +60,7 @@ export function LoginContainer({ initialErrorCode = null, nextPath }: LoginConta
   return (
     <LoginCard
       title="ログイン"
-      description="リアルタイム文字起こしを利用するには、Google アカウントでログインしてください。"
+      description="リアルタイム文字起こしを利用するには、招待済みの Google アカウントでログインしてください。"
       providers={LOGIN_PROVIDERS}
       pendingProviderId={pendingProvider}
       renderProviderButton={({ provider, disabled, isPending, onClick }) => (
@@ -75,7 +77,7 @@ export function LoginContainer({ initialErrorCode = null, nextPath }: LoginConta
         void startSignIn(id);
       }}
       onRetry={handleRetry}
-      footerNote="認証完了後、元の画面へ自動的に戻ります。"
+      footerNote="新規登録は制限されています。認証完了後、元の画面へ自動的に戻ります。"
     />
   );
 }

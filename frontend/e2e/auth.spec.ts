@@ -47,6 +47,15 @@ test("auth/callback 直接アクセスと logout のメソッド・Origin 保護
     page.getByRole("alert").filter({ hasText: "認証コードが見つかりませんでした" }),
   ).toBeVisible();
 
+  await page.goto("/auth/callback?error=access_denied&error_code=signup_disabled");
+  await expect(page).toHaveURL(/\/login\?error=signup_disabled/);
+  await expect(
+    page.getByRole("alert").filter({
+      hasText:
+        "このアカウントは登録されていません。新規登録は制限されているため、管理者による招待が必要です。",
+    }),
+  ).toBeVisible();
+
   const getLogout = await request.get("/auth/logout");
   expect(getLogout.status()).toBe(405);
 

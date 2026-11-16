@@ -52,6 +52,8 @@ Backend の `CORS_ORIGINS` は、許可する Origin をカンマ区切りで指
   - `SOAP_LLM_PROVIDER` / `SOAP_LLM_MODEL` / `SOAP_LLM_FINALIZE_MODEL` / `SOAP_LLM_THINKING_BUDGET` / `SOAP_LLM_MAX_TOKENS` / `SOAP_LLM_TIMEOUT_SECONDS` / `GOOGLE_API_KEY`: リアルタイム SOAP 生成用 LLM 設定（既定は `google_genai`、既定モデル `gemini-3.5-flash-lite`、思考トークン予算既定 `0`。無効化時は `off` または `none` を指定）
   - `SOAP_MIN_INTERVAL_SECONDS` / `SOAP_MAX_BATCH_WAIT_SECONDS`: リアルタイム SOAP 抽出バッチ間隔（既定 `12.0` 秒）
 
+新規登録を禁止し事前招待ユーザーのみ許可する運用では、Supabase Dashboard の `Authentication > Sign In / Providers`（または `User Signups`）で **Allow new users to sign up** を OFF に設定してください。利用者を追加する際は `Authentication > Users` から対象 Google アカウントのメールアドレスを事前登録（`Invite user`、または `Create new user` で `Auto Confirm User` を有効化して作成）します。事前登録されたメールアドレスの Google アカウントのみ OAuth ログインが許可され、未登録アカウントはログイン画面で拒否案内が表示されます。
+
 短い肯定・否定返答や挨拶も、確定発話として直近の会話文脈とともにLLMへ渡します。質問への回答か相槌かを文字列だけでは判定しません。回り込みの自動除外は、空白を除く同一文が8文字以上、両区間の重なりが長い側の80%以上、他chのRMSが自chの3倍超という保守的な初期条件に限定し、除外候補は内部に保持します。これらの閾値は実録音で精度検証済みの値ではありません。
 
 実機では、各マイクを担当話者の口元に近づけ、入力ゲインを調整して音割れと回り込みを抑えます。同じ2ch録音で、話者の誤割り当て、発話の欠落・重複、薬剤名・数値・否定表現の誤りを分けて評価してください。
