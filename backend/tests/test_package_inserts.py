@@ -336,3 +336,69 @@ def test_keyword_expander_defaults_and_parser() -> None:
         "悪心",
         "嘔吐",
     )
+
+
+@pytest.mark.anyio
+async def test_multi_product_scope_isolation_and_partial_replacement() -> None:
+    """複数製品XMLのスコープ分離と部分置換後の旧版YJフィルタを検証する。"""
+    store = InMemoryPackageInsertStore()
+    multi_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<PackIns drugType="Medicine">'
+        "<CompanyIdentifier>200001</CompanyIdentifier>"
+        "<PackageInsertNo>M1</PackageInsertNo>"
+        "<DateOfPreparationOrRevision>"
+        '<PreparationOrRevision id="今回"><YearMonth>2026-05</YearMonth>'
+        "<Version>1</Version></PreparationOrRevision>"
+        "</DateOfPreparationOrRevision>"
+        "<GenericName><Lang>複数製剤成分</Lang></GenericName>"
+        "<ApprovalEtc>"
+        '<DetailBrandName id="BRA"><ApprovalBrandName><Lang>製剤A</Lang></ApprovalBrandName>'
+        "<BrandCode><YJCode>1111111A1011</YJCode></BrandCode></DetailBrandName>"
+        '<DetailBrandName id="BRB"><ApprovalBrandName><Lang>製剤B</Lang></ApprovalBrandName>'
+        "<BrandCode><YJCode>1111111B1011</YJCode></BrandCode></DetailBrandName>"
+        "</ApprovalEtc>"
+        '<Warnings id="sec1">'
+        '<Detail brandRef="BRA"><Lang>製剤A専用の旧警告ワード</Lang></Detail>'
+        '<Detail brandRef="BRB"><Lang>製剤B専用の共通確認事項</Lang></Detail>'
+        "</Warnings>"
+        "</PackIns>"
+    ).encode()
+
+    package_insert_service.import_package_insert_xml(multi_xml, "multi.xml", store=store)
+
+    # 製剤Bのみに絞り込んだ場合、同一セクション内の製剤A専用テキストにはヒットしない
+    b_search = await package_insert_service.search_package_inserts(
+        "製剤A専用の旧警告ワード",
+        yj_codes=["1111111B1011"],
+        store=store,
+    )
+    assert b_search.total_count == 0
+
+    # 製剤Aだけを新しい改訂年月で置き換える
+    new_a_xml = _make_pmda_xml(
+        '<Warnings id="sec1"><Detail><Lang>製剤Aの新規警告ワード</Lang></Detail></Warnings>',
+        company="200002",
+        insert_no="A2",
+        year_month="2026-10",
+        brand_name="製剤A",
+        yj_code="1111111A1011",
+    )
+    package_insert_service.import_package_insert_xml(new_a_xml, "new_a.xml", store=store)
+
+    # YJ指定なしの全件検索でも、置換済みの旧製剤A専用単位は返らない
+    old_a_unfiltered = await package_insert_service.search_package_inserts(
+        "製剤A専用の旧警告ワード",
+        store=store,
+    )
+    assert old_a_unfiltered.total_count == 0
+
+    # 生きている製剤Bと新製剤Aは検索できる
+    b_alive = await package_insert_service.search_package_inserts(
+        "製剤B専用の共通確認事項", store=store
+    )
+    assert b_alive.total_count == 1
+    new_a_alive = await package_insert_service.search_package_inserts(
+        "製剤Aの新規警告ワード", store=store
+    )
+    assert new_a_alive.total_count == 1

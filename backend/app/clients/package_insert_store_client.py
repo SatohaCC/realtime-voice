@@ -276,9 +276,12 @@ class SqlAlchemyPackageInsertStore:
                         },
                     )
 
-    @staticmethod
-    def _ensure_state_row(conn: Connection) -> dict[str, Any]:
-        row = conn.execute(select(_state).where(_state.c.id == 1)).mappings().first()
+    def _ensure_state_row(self, conn: Connection) -> dict[str, Any]:
+        stmt = select(_state).where(_state.c.id == 1)
+        if not self._is_sqlite:
+            # PostgreSQL 複数プロセス間の同時登録を直列化し、連番や世代更新の競合を防ぐ
+            stmt = stmt.with_for_update()
+        row = conn.execute(stmt).mappings().first()
         if row is None:
             gen_id = uuid.uuid4().hex
             conn.execute(insert(_state), {"id": 1, "sequence": 0, "generation_id": gen_id})
@@ -871,18 +874,21 @@ class SqlAlchemyPackageInsertStore:
         requested = {code.strip() for code in (yj_codes or ()) if code.strip()}
         try:
             with self._lock, self._engine.connect() as conn:
+                active_rows = conn.execute(
+                    select(_active_yj.c.version_id, _active_yj.c.yj_code)
+                ).all()
+                active_by_version: dict[str, set[str]] = {}
+                for active_row in active_rows:
+                    active_by_version.setdefault(str(active_row.version_id), set()).add(
+                        str(active_row.yj_code)
+                    )
+
                 if requested:
-                    version_ids = list(
-                        conn.execute(
-                            select(_active_yj.c.version_id)
-                            .where(_active_yj.c.yj_code.in_(requested))
-                            .distinct()
-                        ).scalars()
-                    )
+                    version_ids = [
+                        vid for vid, codes in active_by_version.items() if codes & requested
+                    ]
                 else:
-                    version_ids = list(
-                        conn.execute(select(_active_yj.c.version_id).distinct()).scalars()
-                    )
+                    version_ids = list(active_by_version.keys())
                 if not version_ids:
                     return []
 
@@ -897,8 +903,16 @@ class SqlAlchemyPackageInsertStore:
                 )
                 units: list[StoredSearchUnit] = []
                 for row in rows:
+                    version_id = str(row["version_id"])
+                    active_for_version = active_by_version.get(version_id, set())
                     unit_yj_codes = tuple(json.loads(str(row["yj_codes_json"])))
-                    if requested and not (set(unit_yj_codes) & requested):
+                    # このバージョンが現在所有している YJ コードのみを残し、置換済み製品を除外する
+                    effective_yj_codes = tuple(
+                        code for code in unit_yj_codes if code in active_for_version
+                    )
+                    if not effective_yj_codes:
+                        continue
+                    if requested and not (set(effective_yj_codes) & requested):
                         continue
                     cols_raw = row["columns_json"]
                     units.append(
@@ -911,7 +925,7 @@ class SqlAlchemyPackageInsertStore:
                             kind=str(row["kind"]),
                             product_name=str(row["product_name"]),
                             generic_name=str(row["generic_name"]),
-                            product_yj_codes=unit_yj_codes,
+                            product_yj_codes=effective_yj_codes,
                             document_revision=json.loads(str(row["revision_json"])),
                             text=str(row["text"]),
                             query_text=str(row["query_text"]),

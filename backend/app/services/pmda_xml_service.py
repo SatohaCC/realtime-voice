@@ -876,9 +876,14 @@ def parse_pmda_xml(source: bytes, *, filename: str = "source.xml") -> ParsedPack
         if _tag_name(child) not in _HEADER_TAGS:
             visit(child)
 
-    grouped: dict[str, list[dict[str, Any]]] = {}
+    grouped: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = {}
+    section_scope_counts: Counter[str] = Counter()
     for fragment in fragments:
-        grouped.setdefault(fragment["section"]["code"], []).append(fragment)
+        scope_codes = tuple(dict.fromkeys(str(c) for c in fragment["product_yj_codes"]))
+        key = (str(fragment["section"]["code"]), scope_codes)
+        if key not in grouped:
+            section_scope_counts[key[0]] += 1
+        grouped.setdefault(key, []).append(fragment)
 
     section_defs = {str(s["code"]): s for s in sections}
     primary_revision = next(
@@ -898,7 +903,14 @@ def parse_pmda_xml(source: bytes, *, filename: str = "source.xml") -> ParsedPack
     }
 
     search_units: list[ParsedSearchUnit] = []
-    for position, (sec_code, parts) in enumerate(grouped.items()):
+    seen_section_scopes: Counter[str] = Counter()
+    for position, ((sec_code, _scope_codes), parts) in enumerate(grouped.items()):
+        seen_section_scopes[sec_code] += 1
+        unit_id = (
+            f"{pmda_key}:{sec_code}"
+            if section_scope_counts[sec_code] == 1
+            else f"{pmda_key}:{sec_code}:{seen_section_scopes[sec_code]}"
+        )
         unit_codes = tuple(
             dict.fromkeys(code for part in parts for code in part["product_yj_codes"])
         )
@@ -927,7 +939,7 @@ def parse_pmda_xml(source: bytes, *, filename: str = "source.xml") -> ParsedPack
         )
         search_units.append(
             ParsedSearchUnit(
-                unit_id=f"{pmda_key}:{sec_code}",
+                unit_id=unit_id,
                 position=position,
                 section_code=sec_info["code"],
                 section_title=sec_info["title"],

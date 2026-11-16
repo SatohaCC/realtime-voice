@@ -2,7 +2,7 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { type ChangeEvent, type FormEvent, useId, useRef } from "react";
-import { Badge, Banner, Button, Card } from "../../ui";
+import { Badge, Banner, Button, Card } from "@/shared/ui";
 import { packageInsertImportPanelStyles as s } from "./PackageInsertImportPanel.styles";
 
 export interface ImportedProductView {

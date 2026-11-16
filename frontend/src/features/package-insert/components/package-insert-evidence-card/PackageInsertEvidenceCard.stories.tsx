@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { PackageInsertEvidenceCard } from "./PackageInsertEvidenceCard";
 
 const meta = {
-  title: "Shared/Components/PackageInsertEvidenceCard",
+  title: "Features/PackageInsert/PackageInsertEvidenceCard",
   component: PackageInsertEvidenceCard,
   args: {
     source: {

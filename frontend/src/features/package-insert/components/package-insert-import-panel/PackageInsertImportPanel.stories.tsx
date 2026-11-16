@@ -3,7 +3,7 @@ import { fn } from "storybook/test";
 import { PackageInsertImportPanel } from "./PackageInsertImportPanel";
 
 const meta = {
-  title: "Shared/Components/PackageInsertImportPanel",
+  title: "Features/PackageInsert/PackageInsertImportPanel",
   component: PackageInsertImportPanel,
   args: {
     selectedFileName: "sample-insert.xml",

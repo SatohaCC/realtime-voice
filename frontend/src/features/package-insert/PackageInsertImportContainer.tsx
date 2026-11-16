@@ -1,6 +1,6 @@
 "use client";
 
-import { PackageInsertImportPanel } from "@/shared/components";
+import { PackageInsertImportPanel } from "./components/package-insert-import-panel";
 import { usePackageInsertImport } from "./usePackageInsertImport";
 
 /**

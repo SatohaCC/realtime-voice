@@ -3,7 +3,7 @@ import { fn } from "storybook/test";
 import { PackageInsertSearchPanel } from "./PackageInsertSearchPanel";
 
 const meta = {
-  title: "Shared/Components/PackageInsertSearchPanel",
+  title: "Features/PackageInsert/PackageInsertSearchPanel",
   component: PackageInsertSearchPanel,
   args: {
     query: "吐き気",

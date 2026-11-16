@@ -2,7 +2,7 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { type FormEvent, useId, useState } from "react";
-import { Badge, Banner, Button, Card } from "../../ui";
+import { Badge, Banner, Button, Card } from "@/shared/ui";
 import {
   PackageInsertEvidenceCard,
   type PackageInsertEvidenceItem,

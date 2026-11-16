@@ -1,6 +1,6 @@
 "use client";
 
-import { PackageInsertSearchPanel } from "@/shared/components";
+import { PackageInsertSearchPanel } from "./components/package-insert-search-panel";
 import { usePackageInsertSearch } from "./usePackageInsertSearch";
 
 /**
