@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import * as stylex from "@stylexjs/stylex";
-import { Button, type ButtonVariant } from "./Button";
+import type { ButtonVariant } from "./Button";
+import { Button } from "./Button";
 import { buttonStoryStyles as s } from "./Button.stories.styles";
 
 const meta = {

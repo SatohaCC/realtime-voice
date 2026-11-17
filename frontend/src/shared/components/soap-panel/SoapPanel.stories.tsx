@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
-import { SoapPanel, type SoapPanelSectionView } from "./SoapPanel";
+import type { SoapPanelSectionView } from "./SoapPanel";
+import { SoapPanel } from "./SoapPanel";
 
 const SAMPLE_SECTIONS: readonly SoapPanelSectionView[] = [
   {

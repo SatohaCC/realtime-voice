@@ -1,7 +1,8 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { type CSSProperties, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { IconButton } from "@/shared/ui";
 import { headerStyles } from "./Header.styles";
 

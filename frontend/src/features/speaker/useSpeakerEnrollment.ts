@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { enrollPharmacistVoice } from "@/shared/lib/speaker/enrollSpeakerClient";
+import type { PharmacistVoiceprintRecord } from "@/shared/lib/speaker/voiceprintStore";
 import {
   deletePharmacistVoiceprint,
   loadPharmacistVoiceprint,
-  type PharmacistVoiceprintRecord,
   savePharmacistVoiceprint,
 } from "@/shared/lib/speaker/voiceprintStore";
 import {

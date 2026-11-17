@@ -5,10 +5,8 @@ import type {
   TranscriptChatSegment,
   TranscriptSpeakerId,
 } from "@/shared/components";
-import {
-  TranscriptionWorkspaceView,
-  type TranscriptionWorkspaceViewProps,
-} from "./RealtimeTranscriptionContainer";
+import type { TranscriptionWorkspaceViewProps } from "./RealtimeTranscriptionContainer";
+import { TranscriptionWorkspaceView } from "./RealtimeTranscriptionContainer";
 
 const SAMPLE_SEGMENTS: readonly TranscriptChatSegment[] = [
   {

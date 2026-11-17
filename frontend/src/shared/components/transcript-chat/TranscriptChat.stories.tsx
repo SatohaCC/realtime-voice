@@ -1,11 +1,11 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { useState } from "react";
-import {
-  TranscriptChat,
-  type TranscriptChatSegment,
-  type TranscriptSpeakerId,
-  type TranscriptSpeakerOption,
+import type {
+  TranscriptChatSegment,
+  TranscriptSpeakerId,
+  TranscriptSpeakerOption,
 } from "./TranscriptChat";
+import { TranscriptChat } from "./TranscriptChat";
 
 const SPEAKER_OPTIONS: readonly TranscriptSpeakerOption[] = [
   { value: "host", label: "進行役" },

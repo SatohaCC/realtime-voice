@@ -13,6 +13,7 @@
     "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2,
+    "lineEnding": "lf",
     "lineWidth": 100
   },
   "linter": {
@@ -22,7 +23,25 @@
       "react": "recommended"
     },
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "correctness": {
+        "useExhaustiveDependencies": "error",
+        "useHookAtTopLevel": "error"
+      },
+      "suspicious": {
+        "noExplicitAny": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "error",
+        "useImportType": {
+          "level": "error",
+          "options": { "style": "separatedType" }
+        },
+        "useConsistentArrayType": {
+          "level": "error",
+          "options": { "syntax": "shorthand" }
+        }
+      }
     }
   },
   "javascript": {
@@ -50,13 +69,21 @@
                 "patterns": [
                   {
                     "group": [
-                      "@/features/*",
-                      "@/app/*",
+                      "**/features/**",
+                      "**/app/**",
+                      "@/shared/lib",
+                      "@/shared/lib/**",
+                      "**/../lib/**",
+                      "@/shared/components",
+                      "@/shared/components/**",
+                      "**/../components/**",
+                      "@supabase/**",
                       "@tanstack/react-query",
-                      "next/navigation",
-                      "next/router"
+                      "@tanstack/react-query/**",
+                      "next",
+                      "next/**"
                     ],
-                    "message": "shared/ui must stay portable and Props-driven."
+                    "message": "shared/ui は共有スタイルと UI 部品に依存し、データや操作は Props で受け取ってください。"
                   }
                 ]
               }
@@ -76,14 +103,19 @@
                 "patterns": [
                   {
                     "group": [
-                      "@/features/*",
-                      "@/app/*",
-                      "@ui-sdk/*",
+                      "**/features/**",
+                      "**/app/**",
+                      "@/shared/lib",
+                      "@/shared/lib/**",
+                      "**/../lib/**",
+                      "@ui-sdk/**",
+                      "@supabase/**",
                       "@tanstack/react-query",
-                      "next/navigation",
-                      "next/router"
+                      "@tanstack/react-query/**",
+                      "next",
+                      "next/**"
                     ],
-                    "message": "shared/components must compose shared/ui only and stay Props-driven."
+                    "message": "shared/components は shared/ui と共有スタイルで構成し、データや操作は Props で受け取ってください。"
                   }
                 ]
               }
@@ -102,8 +134,8 @@
               "options": {
                 "patterns": [
                   {
-                    "group": ["@ui-sdk/*", "@tanstack/react-query"],
-                    "message": "Import UI primitives from @/shared/ui and query helpers from @/shared/lib."
+                    "group": ["@ui-sdk/**", "@tanstack/react-query", "@tanstack/react-query/**"],
+                    "message": "UI 部品は @/shared/ui、クエリ機能は @/shared/lib から import してください。"
                   }
                 ]
               }

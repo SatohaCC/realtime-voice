@@ -1,7 +1,8 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { Badge, type BadgeProps, Banner, Button, Progress } from "@/shared/ui";
+import type { BadgeProps } from "@/shared/ui";
+import { Badge, Banner, Button, Progress } from "@/shared/ui";
 import { speakerEnrollmentBarStyles as s } from "./SpeakerEnrollmentBar.styles";
 
 export interface SpeakerEnrollmentBarProps {

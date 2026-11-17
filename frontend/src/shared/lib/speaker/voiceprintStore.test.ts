@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { PharmacistVoiceprintRecord } from "./voiceprintStore";
 import {
   deletePharmacistVoiceprint,
   loadPharmacistVoiceprint,
-  type PharmacistVoiceprintRecord,
   savePharmacistVoiceprint,
 } from "./voiceprintStore";
 

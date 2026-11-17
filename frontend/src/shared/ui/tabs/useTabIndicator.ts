@@ -1,4 +1,5 @@
-import { type RefObject, useLayoutEffect } from "react";
+import type { RefObject } from "react";
+import { useLayoutEffect } from "react";
 
 /** DOMの選択状態・寸法と、伸縮するインジケーターを同期する。 */
 export function useTabIndicator(

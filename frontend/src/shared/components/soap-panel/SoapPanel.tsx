@@ -2,7 +2,8 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { useState } from "react";
-import { Badge, type BadgeProps, Banner, Button, Card } from "@/shared/ui";
+import type { BadgeProps } from "@/shared/ui";
+import { Badge, Banner, Button, Card } from "@/shared/ui";
 import { soapPanelStyles as s } from "./SoapPanel.styles";
 
 export interface SoapEvidenceView {

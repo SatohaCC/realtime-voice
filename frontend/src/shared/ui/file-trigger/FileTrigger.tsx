@@ -1,8 +1,10 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { type ChangeEvent, useRef } from "react";
-import { Button, type ButtonVariant } from "../button";
+import type { ChangeEvent } from "react";
+import { useRef } from "react";
+import type { ButtonVariant } from "../button";
+import { Button } from "../button";
 import { fileTriggerStyles as s } from "./FileTrigger.styles";
 
 export interface FileTriggerProps {

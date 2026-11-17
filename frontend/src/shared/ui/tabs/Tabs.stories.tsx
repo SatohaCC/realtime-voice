@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { useState } from "react";
-import { Tabs, type TabsProps } from "./Tabs";
+import type { TabsProps } from "./Tabs";
+import { Tabs } from "./Tabs";
 
 const meta = {
   title: "shared/ui/Tabs",

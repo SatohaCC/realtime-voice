@@ -1,10 +1,10 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
+import type { MeterLabelDetails } from "@ui-sdk/react/meter";
 import {
   MeterIndicator,
   MeterLabel,
-  type MeterLabelDetails,
   MeterTrack,
   MeterValue,
   Meter as UiMeter,

@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  AudioCaptureFrame,
+  CaptureDevices,
+  DualMicCaptureSession,
+} from "@/shared/lib/audio/dualMicCapture";
 import {
-  type AudioCaptureFrame,
-  type CaptureDevices,
   createDualMicCapture,
-  type DualMicCaptureSession,
   detectSpeakingChannels,
   resolveCaptureDevices,
 } from "@/shared/lib/audio/dualMicCapture";

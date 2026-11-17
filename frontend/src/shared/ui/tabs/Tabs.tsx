@@ -2,7 +2,8 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { TabsList, TabsPanel, TabsTab, TabsTabIcon, Tabs as UiTabs } from "@ui-sdk/react/tabs";
-import { type ComponentProps, type ReactNode, useRef } from "react";
+import type { ComponentProps, ReactNode } from "react";
+import { useRef } from "react";
 import { tabsStyles as s } from "./Tabs.styles";
 import { useTabIndicator } from "./useTabIndicator";
 

@@ -5,22 +5,21 @@ import { useRouter } from "next/navigation";
 import type { ComponentProps } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useSpeakerEnrollment } from "@/features/speaker/useSpeakerEnrollment";
-import {
-  type MicChannelView,
-  type SoapItemBadge,
-  SoapPanel,
-  type SoapPanelSectionView,
-  TranscriptChat,
-  type TranscriptChatSegment,
-  WorkspaceControlBar,
+import type {
+  MicChannelView,
+  SoapItemBadge,
+  SoapPanelSectionView,
+  TranscriptChatSegment,
 } from "@/shared/components";
+import { SoapPanel, TranscriptChat, WorkspaceControlBar } from "@/shared/components";
 import { formatSoapNoteAsText } from "@/shared/lib/conversation/soapClipboard";
 import type {
   SoapLifecycleStatus,
   SoapSectionKey,
   SpeakerRole,
 } from "@/shared/lib/conversation/types";
-import { Badge, type BadgeProps, Button } from "@/shared/ui";
+import type { BadgeProps } from "@/shared/ui";
+import { Badge, Button } from "@/shared/ui";
 import { realtimeTranscriptionContainerStyles as s } from "./RealtimeTranscriptionContainer.styles";
 import { useRealtimeTranscription } from "./useRealtimeTranscription";
 

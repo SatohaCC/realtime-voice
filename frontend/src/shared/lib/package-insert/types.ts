@@ -89,7 +89,7 @@ export interface PackageInsertEvidenceSource {
   kind: string;
   excerpt: string;
   columns?: Record<string, string> | null;
-  references: Array<Record<string, unknown>>;
+  references: Record<string, unknown>[];
   url: string;
   retrieved_by: string[];
 }

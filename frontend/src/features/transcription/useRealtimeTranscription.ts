@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDualMicAudio } from "@/features/audio/useDualMicAudio";
 import type { AudioCaptureFrame } from "@/shared/lib/audio/dualMicCapture";
+import type { ConversationWorkspaceState } from "@/shared/lib/conversation/conversationReducer";
 import {
   applyConversationSegmentEnabled,
   applyConversationWsEvent,
-  type ConversationWorkspaceState,
   clearSoapHighlights,
   createInitialConversationState,
   prepareStreamReconnect,
@@ -15,11 +15,11 @@ import { readSegmentEnabledUpdates } from "@/shared/lib/conversation/segmentEnab
 import type { SpeakerRole } from "@/shared/lib/conversation/types";
 import { getValidAccessToken, subscribeAuthState } from "@/shared/lib/supabase/client";
 import { AudioLevelHistory } from "@/shared/lib/transcription/audioLevelHistory";
-import {
-  createDeepgramStreamSession,
-  type DeepgramSpeakerProfilePayload,
-  type DeepgramStreamSession,
+import type {
+  DeepgramSpeakerProfilePayload,
+  DeepgramStreamSession,
 } from "@/shared/lib/transcription/deepgramClient";
+import { createDeepgramStreamSession } from "@/shared/lib/transcription/deepgramClient";
 import {
   applyDeepgramTranscriptEvent,
   createInitialTranscriptState,

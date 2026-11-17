@@ -1,10 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  type AudioInputDeviceInfo,
-  listAudioInputDevices,
-} from "@/shared/lib/audio/dualMicCapture";
+import type { AudioInputDeviceInfo } from "@/shared/lib/audio/dualMicCapture";
+import { listAudioInputDevices } from "@/shared/lib/audio/dualMicCapture";
 
 export interface UseAudioInputDevicesOptions {
   /** デバイス一覧取得後に呼ばれるコールバック */

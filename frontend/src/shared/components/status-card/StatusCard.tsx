@@ -1,5 +1,6 @@
 import * as stylex from "@stylexjs/stylex";
-import { Badge, type BadgeProps, Button, Card } from "@/shared/ui";
+import type { BadgeProps } from "@/shared/ui";
+import { Badge, Button, Card } from "@/shared/ui";
 import { statusCardStyles } from "./StatusCard.styles";
 
 export interface StatusCardProps {
